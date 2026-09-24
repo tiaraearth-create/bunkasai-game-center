@@ -226,7 +226,7 @@
       const unlock = () => { ensureAudio(); };
       ['pointerdown', 'keydown', 'touchstart'].forEach(ev => document.addEventListener(ev, unlock, { passive: true }));
       // ページ内の a[href] クリック音
-      document.title = cfg.title ? `${cfg.title} | 文化祭ゲーム` : document.title;
+      document.title = cfg.title ? `${cfg.title} | NEON FESTA` : document.title;
     };
     if (document.body) build(); else document.addEventListener('DOMContentLoaded', build);
     return FES;
