@@ -36,6 +36,7 @@
   .card.tas { background: repeating-linear-gradient(135deg, rgba(255,40,120,.08) 0 8px, rgba(0,0,0,0) 8px 16px), rgba(255,255,255,.05); }
   .card .skull { display: inline-block; margin-top: 6px; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 900; letter-spacing: .05em;
                  background: linear-gradient(90deg,#ff2878,#8a0030); box-shadow: 0 0 12px rgba(255,40,120,.6); animation: pulse 1.2s ease-in-out infinite; }
+  .card .skull.sudden { background: linear-gradient(90deg,#ffb020,#c04000); box-shadow: 0 0 12px rgba(255,160,40,.6); margin-left: 4px; }
   .diff button.off { opacity: .3; cursor: default; pointer-events: none; box-shadow: none; }
   @media (max-width: 1100px) and (min-width: 761px) { .songs { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
   .diff { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-bottom: 16px; }
@@ -147,13 +148,26 @@ FES.init({ id: 'rhythm', title: 'リズムスターズ' });
    定数
    ===================================================================== */
 const FONT = '"Noto Sans JP","Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif';
-let LANES = 4;                                   // 現在のレーン数（TAS曲では 4 → 6 → 8 に増える）
-const LANE_RGB8 = [[180, 90, 255], [255, 140, 60], [255, 79, 139], [255, 210, 63], [61, 255, 176], [79, 195, 255], [255, 110, 220], [170, 255, 90]];
-const LANE_RGB = LANE_RGB8.slice(2, 6);          // 4レーン時の従来色
-const laneRGB = l => LANE_RGB8[l + (8 - LANES) / 2] || LANE_RGB8[0];
+let LANES = 4;                                   // 現在のレーン数（TAS曲では 4 → 6 → 8 → 12 → 16 に増える）
+const MAX_LANES = 16;
+const LANE_RGB16 = [[255, 90, 90], [255, 200, 120], [120, 80, 255], [90, 230, 255], [180, 90, 255], [255, 140, 60],
+  [255, 79, 139], [255, 210, 63], [61, 255, 176], [79, 195, 255],
+  [255, 110, 220], [170, 255, 90], [200, 120, 255], [255, 180, 60], [90, 140, 255], [255, 60, 60]];
+const LANE_RGB = LANE_RGB16.slice(6, 10);        // 4レーン時の従来色
+const laneRGB = l => LANE_RGB16[l + (MAX_LANES - LANES) / 2] || LANE_RGB16[0];
 const ARROW_LABELS = ['←', '↓', '↑', '→'];
-const KEY_SETS = { 4: ['KeyD', 'KeyF', 'KeyJ', 'KeyK'], 6: ['KeyS', 'KeyD', 'KeyF', 'KeyJ', 'KeyK', 'KeyL'], 8: ['KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyJ', 'KeyK', 'KeyL', 'Semicolon'] };
-const KEY_LABEL_SETS = { 4: ['D', 'F', 'J', 'K'], 6: ['S', 'D', 'F', 'J', 'K', 'L'], 8: ['A', 'S', 'D', 'F', 'J', 'K', 'L', ';'] };
+const KEY_SETS = {
+  4: ['KeyD', 'KeyF', 'KeyJ', 'KeyK'],
+  6: ['KeyS', 'KeyD', 'KeyF', 'KeyJ', 'KeyK', 'KeyL'],
+  8: ['KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyJ', 'KeyK', 'KeyL', 'Semicolon'],
+  12: ['KeyQ', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyJ', 'KeyK', 'KeyL', 'Semicolon', 'KeyO', 'KeyP'],
+  16: ['KeyZ', 'KeyX', 'KeyQ', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyJ', 'KeyK', 'KeyL', 'Semicolon', 'KeyO', 'KeyP', 'Period', 'Slash'],
+};
+const KEY_LABEL_SETS = {
+  4: ['D', 'F', 'J', 'K'], 6: ['S', 'D', 'F', 'J', 'K', 'L'], 8: ['A', 'S', 'D', 'F', 'J', 'K', 'L', ';'],
+  12: ['Q', 'W', 'A', 'S', 'D', 'F', 'J', 'K', 'L', ';', 'O', 'P'],
+  16: ['Z', 'X', 'Q', 'W', 'A', 'S', 'D', 'F', 'J', 'K', 'L', ';', 'O', 'P', '.', '/'],
+};
 function laneKeyMap(n) {
   const m = {}; KEY_SETS[n].forEach((k, i) => { m[k] = i; });
   if (n === 4) { m.ArrowLeft = 0; m.ArrowDown = 1; m.ArrowUp = 2; m.ArrowRight = 3; }
@@ -421,17 +435,18 @@ const BALLAD = {
 function lcg(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
 const TAS_SCALE = [64, 67, 69, 71, 74, 76, 79, 81, 83, 86, 88];
 /** 16分主体の高速ランを決定論的に生成（bars 小節ぶん） */
-function tasMelody(bars, seed, dens) {
+function tasMelody(bars, seed, dens, scale) {
+  scale = scale || TAS_SCALE;
   const rnd = lcg(seed); const out = []; let idx = 3, dir = 1;
   for (let b = 0; b < bars; b++) {
     const bar = [];
     for (let s = 0; s < 16; s++) {
       if (rnd() > dens) continue;
       if (rnd() < 0.2) dir = -dir;
-      idx = FES.clamp(idx + dir * (rnd() < 0.7 ? 1 : 2), 0, TAS_SCALE.length - 1);
-      if (idx === 0 || idx === TAS_SCALE.length - 1) dir = -dir;
+      idx = FES.clamp(idx + dir * (rnd() < 0.7 ? 1 : 2), 0, scale.length - 1);
+      if (idx === 0 || idx === scale.length - 1) dir = -dir;
       const len = s % 8 === 0 && rnd() < 0.3 ? 4 : s % 4 === 0 && rnd() < 0.3 ? 2 : 1;
-      bar.push([s, TAS_SCALE[idx], len]);
+      bar.push([s, scale[idx], len]);
       if (len > 1) s += len - 1;
     }
     out.push(bar);
@@ -468,10 +483,72 @@ const TAS = {
   outro: { chord: [64, 67, 71, 76, 79], bassMidi: 28, crash: true, hits: true, chordInst: 'pchord', chordMidi: 40 },
   hook: ROCK.hook,
 };
-const SONGS = [NEON, SAKURA, ROCK, BALLAD, TAS];
+// ---------- 6. カタストロフ∞（TAS / CATASTROPHE / 100 → 250 BPM / 70 小節 ≒ 80 秒） ----------
+const CAT_I = [
+  [[0, 69, 4], [4, 72, 4], [8, 76, 8]],
+  [[0, 74, 4], [4, 72, 4], [8, 69, 8]],
+  [[0, 67, 4], [4, 71, 4], [8, 74, 8]],
+  [[0, 72, 12]],
+  [[0, 69, 4], [4, 72, 4], [8, 77, 8]],
+  [[0, 76, 4], [4, 74, 4], [8, 72, 8]],
+  [[0, 71, 4], [4, 74, 4], [8, 76, 4], [12, 79, 4]],
+  [[0, 81, 16]],
+];
+const CAT_SCALE = [69, 72, 74, 76, 79, 81, 84, 86, 88, 91, 93];
+const CAT_CH = [45, 41, 43, 40, 45, 41, 43, 40, 45, 41, 43, 40, 45, 41, 43, 40];
+const CAT = {
+  id: 'cat', name: 'カタストロフ∞', genre: 'TAS / CATASTROPHE', bpm: 100, bpmLabel: '100→250', theme: 'cat1', color: [255, 30, 90], hex: '#ff1e5a',
+  tas: true, sudden: true, nofail: true, approach: 1.0, rankId: 'rhythm_tas2',
+  tempo: [{ bar: 0, bpm: 100 }, { bar: 8, bpm: 250, gap: 1.0 }],          // 8 小節目の前に 1.0 秒のフェイク停止
+  themes: [{ bar: 0, theme: 'cat1' }, { bar: 8, theme: 'cat2' }],
+  inst: { k: 'gkick', s: 'rsnare', h: 'hat', bass: 'rbass', lead: 'hlead', pad: 'pad' },
+  minorPc: { 9: true, 4: true, 2: true },
+  drums: {
+    soft:    { k: 'x.......x.......', s: '................', h: '................' },
+    gabber:  { k: 'x...x...x...x...', s: '....x.......x...', h: 'xxxxxxxxxxxxxxxx' },
+    gabber2: { k: 'x.x.x.x.x.x.x.x.', s: '....x.......x...', h: 'xxxxxxxxxxxxxxxx' },
+    sixteen: { k: 'xxxxxxxxxxxxxxxx', s: '....x.......x...', h: 'x.x.x.x.x.x.x.x.' },
+  },
+  bassPat: { eight: 'r.r.r.r.r.r.r.r.', six: 'rrrrrrrrrrrrrrrr' },
+  melDiv: [1, 1, 1], holdMin: [4, 4, 4], stream: null, finale: null,
+  sections: [
+    { name: 'INTRO',    bars: 8,  chords: [45, 41, 43, 48, 45, 41, 43, 40], mel: CAT_I, leadInst: 'piano', drums: 'soft', strings: true, lanes: 4, pat: 'calm' },
+    { name: 'DROP',     bars: 16, chords: CAT_CH, mel: tasMelody(16, 91, 0.85, CAT_SCALE), drums: 'gabber', bass: 'eight', saw: 'x.......x.......', pump: true, lanes: 8, laneChange: true, instant: true, pat: 'drop8', fill: true },
+    { name: 'RISE',     bars: 2,  chords: [45, 45], mel: null, drums: 'gabber', bass: 'eight', saw: 'x...............', pump: true, priser: true, roll: true, lanes: 8, pat: 'roll' },
+    { name: 'JACK',     bars: 12, chords: CAT_CH, mel: tasMelody(12, 97, 0.9, CAT_SCALE), drums: 'gabber2', bass: 'six', saw: 'x.......x.......', pump: true, lanes: 12, laneChange: true, pat: 'jack12', fill: true },
+    { name: 'SPLIT',    bars: 8,  chords: CAT_CH, mel: tasMelody(8, 103, 0.95, CAT_SCALE), drums: 'gabber2', bass: 'six', saw: 'x...x...x...x...', pump: true, lanes: 12, pat: 'split12', octave: true, fill: true },
+    { name: 'RISE II',  bars: 2,  chords: [45, 45], mel: null, drums: 'gabber2', bass: 'six', saw: 'x...............', pump: true, priser: true, roll: true, lanes: 12, pat: 'roll' },
+    { name: 'WALL',     bars: 8,  chords: CAT_CH, mel: tasMelody(8, 107, 0.9, CAT_SCALE), drums: 'sixteen', bass: 'six', saw: 'x.......x.......', pump: true, lanes: 16, laneChange: true, critical: true, pat: 'wall16', octave: true, fill: true },
+    { name: 'STAIRS',   bars: 6,  chords: CAT_CH, mel: tasMelody(6, 109, 1, CAT_SCALE), drums: 'sixteen', bass: 'six', saw: 'x...x...x...x...', pump: true, lanes: 16, pat: 'stairs16', octave: true, bigfill: true },
+    { name: 'FINAL',    bars: 6,  chords: [45, 45, 45, 45, 45, 40], mel: tasMelody(6, 113, 1, CAT_SCALE), drums: 'sixteen', bass: 'six', saw: 'x.......x.......', pump: true, lanes: 16, pat: 'final16', octave: true, bigfill: true },
+    { name: 'OUTRO',    bars: 2,  chords: [45, 45], outro: true, lanes: 16, pat: 'outroHit' },
+  ],
+  outro: { chord: [69, 72, 76, 81, 84], bassMidi: 33, crash: true, hits: true, chordInst: 'supersaw', chordMidi: 57 },
+  hook(C) {
+    const S = C.S, D = C.def.drums[S.drums];
+    if (S.strings) C.ev.push({ t: C.barT, kind: 'strings', root: C.root, dur: C.BAR, minor: C.def.minorPc, open: C.b / S.bars });
+    if (S.saw) {
+      const P = S.saw;
+      for (let s = 0; s < 16; s++) {
+        if (P[s] !== 'x') continue;
+        let len = 1; while (s + len < 16 && P[s + len] === '.') len++;
+        C.ev.push({ t: C.barT + s * C.STEP, kind: 'supersaw', midi: C.root + 12, dur: len * C.STEP * 0.95, vol: 1 });
+      }
+    }
+    if (S.pump && D) for (let s = 0; s < 16; s++) if (D.k[s] === 'x') C.ev.push({ t: C.barT + s * C.STEP, kind: 'pump' });
+    if (S.priser && C.b === 0) C.ev.push({ t: C.barT, kind: 'priser', midi: 57, dur: C.BAR * S.bars });
+    if (S.roll) {
+      const div = C.b === 0 ? 16 : 32;
+      for (let i = 0; i < div; i++) C.ev.push({ t: C.barT + i * C.BAR / div, kind: 'rsnare', vol: (C.b === 0 ? 0.4 : 0.65) + 0.35 * i / div });
+    }
+  },
+};
+const SONGS = [NEON, SAKURA, ROCK, BALLAD, TAS, CAT];
 
 const THEMES = {
   tas:    { bg: ['#1a0208', '#4a0420'], glow: [255, 40, 120],  grid: [255, 60, 140],  line: [255, 170, 210], fx: 'embers', emberHue: 330, starN: 20, bolt: [255, 60, 160] },
+  cat1:   { bg: ['#020818', '#0a1650'], glow: [80, 110, 255],  grid: [90, 120, 255],  line: [170, 200, 255], fx: 'shooting', starN: 130, slowStars: true },
+  cat2:   { bg: ['#150104', '#4a0410'], glow: [255, 30, 70],   grid: [255, 50, 90],   line: [255, 160, 180], fx: 'embers', emberHue: 350, starN: 15, bolt: [255, 40, 90] },
   neon:   { bg: ['#05041a', '#140a3c'], glow: [130, 90, 255], grid: [150, 110, 255], line: [200, 180, 255], fx: 'stars',    starN: 90 },
   sakura: { bg: ['#170a1c', '#3a1236'], glow: [255, 140, 190], grid: [255, 150, 200], line: [255, 205, 228], fx: 'petals',   starN: 40 },
   rock:   { bg: ['#120303', '#3c0d05'], glow: [255, 120, 40],  grid: [255, 95, 40],   line: [255, 205, 150], fx: 'embers',   starN: 30 },
@@ -481,14 +558,39 @@ const THEMES = {
 /* =====================================================================
    楽曲イベント生成（定義 → 音イベント列 + 譜面素材）
    ===================================================================== */
+/** テンポマップ: 区間ごとの BPM（と区間前の無音 gap）から 拍⇔時間 を相互変換する */
+function makeTempo(def, totalBars) {
+  const raw = def.tempo || [{ bar: 0, bpm: def.bpm }];
+  const segs = []; let t = 0;
+  raw.forEach((r, i) => {
+    const beat = 60 / r.bpm, barLen = beat * 4;
+    const nextBar = i + 1 < raw.length ? raw[i + 1].bar : totalBars;
+    const s = { bar: r.bar, bars: nextBar - r.bar, bpm: r.bpm, beat, barLen, gap: r.gap || 0, t0: t + (r.gap || 0), beat0: r.bar * 4 };
+    s.t1 = s.t0 + s.bars * barLen; t = s.t1; segs.push(s);
+  });
+  const segOfBeat = b => { let s = segs[0]; for (let i = 0; i < segs.length; i++) if (b >= segs[i].beat0) s = segs[i]; return s; };
+  const segOfTime = tt => { let s = segs[0]; for (let i = 0; i < segs.length; i++) if (tt >= segs[i].t0) s = segs[i]; return s; };
+  return {
+    segs, length: t,
+    segOfBar: b => segOfBeat(b * 4),
+    beatToTime: b => { const s = segOfBeat(b); return s.t0 + (b - s.beat0) * s.beat; },
+    timeToBeat: tt => { const s = segOfTime(tt); return s.beat0 + (Math.min(tt, s.t1) - s.t0) / s.beat; },
+    beatLenAt: tt => segOfTime(tt).beat,
+    bpmAt: tt => segOfTime(tt).bpm,
+    freezes: segs.filter(s => s.gap > 0).map(s => ({ from: s.t0 - s.gap, to: s.t0, gap: s.gap })),
+  };
+}
 function buildSong(def) {
-  const BEAT = 60 / def.bpm, STEP = BEAT / 4, BAR = BEAT * 4;
+  const totalBars = def.sections.reduce((a, S) => a + S.bars, 0);
+  const tempo = makeTempo(def, totalBars);
   const ev = [], mel = [], drums = [], sections = [];
   let bar0 = 0;
   def.sections.forEach((S, si) => {
-    sections.push({ name: S.name, start: bar0 * BAR, end: (bar0 + S.bars) * BAR });
+    sections.push({ name: S.name, start: tempo.beatToTime(bar0 * 4), end: tempo.beatToTime((bar0 + S.bars) * 4), bar0, bars: S.bars });
     for (let b = 0; b < S.bars; b++) {
-      const barT = (bar0 + b) * BAR;
+      const seg = tempo.segOfBar(bar0 + b);
+      const BEAT = seg.beat, STEP = BEAT / 4, BAR = seg.barLen;
+      const barT = tempo.beatToTime((bar0 + b) * 4);
       const root = S.chords[b % S.chords.length];
       const isLast = b === S.bars - 1;
       if (S.drums && def.drums[S.drums]) {
@@ -550,8 +652,11 @@ function buildSong(def) {
     }
     bar0 += S.bars;
   });
+  tempo.freezes.forEach(f => ev.push({ t: f.from, kind: 'tapestop', gap: f.gap }));
   ev.sort((a, b) => a.t - b.t);
-  return { def, events: ev, mel, drums, sections, length: bar0 * BAR, beat: BEAT, step: STEP, bar: BAR };
+  const s0 = tempo.segs[0];
+  const themeChanges = (def.themes || []).map(x => ({ t: tempo.beatToTime(x.bar * 4), theme: x.theme }));
+  return { def, events: ev, mel, drums, sections, length: tempo.length, beat: s0.beat, step: s0.beat / 4, bar: s0.barLen, tempo, freezes: tempo.freezes, themeChanges };
 }
 const SONG_DATA = SONGS.map(buildSong);
 
@@ -576,7 +681,7 @@ function buildChart(song, di) {
     S.mel.forEach(bar => bar.forEach(n => set.add(n[1])));
     const sorted = Array.from(set).sort((a, b) => a - b);
     const map = {};
-    sorted.forEach((m, k) => { map[m] = FES.clamp(Math.floor(k / sorted.length * LANES), 0, LANES - 1); });
+    sorted.forEach((m, k) => { map[m] = FES.clamp(Math.floor(k / sorted.length * 4), 0, 3); });   // 通常曲は常に 4 レーン
     laneMaps[i] = map;
   });
   const streamSec = def.stream != null ? song.sections[def.stream] : null;
@@ -744,38 +849,106 @@ const TAS_PATTERNS = {
   outro(P) {   // 全レーン同時ロング
     if (P.b === 0) for (let l = 0; l < 8; l++) P.hold(0, 24, l);
   },
+  /* ---- カタストロフ∞ ---- */
+  calm(P) {    // イントロ: 4分音符中心 + ロング数本（油断させる）
+    const seq = [1, 2, 0, 3, 2, 1, 3, 0];
+    if (P.b % 4 === 3) { const hl = seq[P.b % 8]; P.hold(0, 12, hl); P.tap(4, (hl + 2) % 4); P.tap(8, (hl + 1) % 4); return; }
+    for (let s = 0; s < 16; s += 4) P.tap(s, seq[(P.b * 2 + s / 4) % 8]);
+  },
+  drop8(P) {   // 16分階段 / トリル / 8レーン壁
+    const b = P.b;
+    if (b % 4 === 3) {
+      for (let s = 0; s < 16; s++) {
+        if (s % 2 === 0) { const size = 4 + Math.floor(P.rnd() * 3), st = Math.floor(P.rnd() * (8 - size + 1)); for (let l = st; l < st + size; l++) P.tap(s, l); }
+        else P.tap(s, (s * 3 + b) % 8);
+      }
+    } else if (b % 4 === 1) {
+      const a = b % 8 < 4 ? 0 : 7, c = b % 8 < 4 ? 1 : 6;
+      for (let s = 0; s < 16; s++) P.tap(s, s % 2 ? c : a);
+      P.tap(0, 3); P.tap(8, 4);
+    } else {
+      for (let s = 0; s < 16; s++) P.tap(s, (b % 8 < 4) ? (s < 8 ? s : 15 - s) : (s < 8 ? 7 - s : s - 8));
+    }
+  },
+  roll(P) {    // スネアロールに合わせた中央2レーンの連打（16分 → 32分）
+    const a = P.n / 2 - 1, c = P.n / 2, div = P.b === 0 ? 16 : 32;
+    for (let i = 0; i < div; i++) P.at(i * 16 / div, i % 2 ? c : a);
+    if (P.b === 1) { P.tap(0, 0); P.tap(0, P.n - 1); P.tap(8, 1); P.tap(8, P.n - 2); }
+  },
+  jack12(P) {  // 24分ジャック + 32分バースト（12レーン）
+    for (let beat = 0; beat < 4; beat++) {
+      const lane = (P.b * 5 + beat * 3) % 12;
+      if (beat % 2 === 0) for (let i = 0; i < 6; i++) P.at(beat * 4 + i * 4 / 6, lane);
+      else { for (let i = 0; i < 4; i++) P.at(beat * 4 + i * 0.5, lane); for (let i = 0; i < 4; i++) P.at(beat * 4 + 2 + i * 0.5, (lane + 6) % 12); }
+      if (beat === 0) { P.tap(0, (lane + 3) % 12); P.tap(0, (lane + 9) % 12); }
+    }
+  },
+  split12(P) { // 左右交互ズレ押し（12レーン）+ ロングと連打の複合
+    if (P.b % 4 === 3) {
+      P.hold(0, 16, 0); P.hold(0, 16, 11);
+      for (let s = 0; s < 16; s++) P.tap(s, 1 + ((s * 3 + P.b) % 10));
+      return;
+    }
+    for (let s = 0; s < 16; s++) {
+      P.tap(s, (s + P.b) % 6);
+      P.at(s + 0.5, 11 - ((s + P.b * 2) % 6));
+    }
+  },
+  wall16(P) {  // 4〜16 同時押しの壁（8分）+ 16分単発
+    for (let s = 0; s < 16; s++) {
+      if (s % 2 === 0) {
+        const size = s === 0 ? 16 : 4 + Math.floor(P.rnd() * 13);
+        const st = Math.floor(P.rnd() * (16 - size + 1));
+        for (let l = st; l < st + size; l++) P.tap(s, l);
+      } else P.tap(s, (s * 5 + P.b) % 16);
+    }
+  },
+  stairs16(P) { // 全レーン 32分階段 1→16→1
+    for (let i = 0; i < 30; i++) P.at(i * 0.5, P.b % 2 === 0 ? (i < 16 ? i : 30 - i) : (i < 16 ? 15 - i : i - 15));
+    P.tap(15, 0); P.tap(15, 15);
+  },
+  final16(P) { // 16レーン全押し ×8 → 全レーン同時ロング → キメの1音
+    if (P.b === 0) { for (let s = 0; s < 16; s += 2) for (let l = 0; l < 16; l++) P.tap(s, l); }
+    else if (P.b === 1) { for (let l = 0; l < 16; l++) P.hold(0, 64, l); }
+    else if (P.b === 5) { for (let l = 0; l < 16; l++) P.tap(0, l); }
+  },
+  outroHit() {},
 };
 function buildTasChart(song) {
-  const def = song.def, BEAT = song.beat, STEP = song.step, BAR = song.bar;
-  const MIN = BEAT / 8;                                    // 同レーン最小間隔 = 32分
+  const def = song.def, tempo = song.tempo;
   const notes = [], laneChanges = [];
   const rnd = lcg(20220);
-  const mk = (t, lane, lanes, end) => ({ t, lane, lanes, type: end ? 'hold' : 'tap', end: end || 0, src: 'tas', state: 0, judge: null, chord: false,
+  const mk = (t, lane, lanes, bl, end) => ({ t, lane, lanes, bl, type: end ? 'hold' : 'tap', end: end || 0, src: 'tas', state: 0, judge: null, chord: false,
     ticks: null, tickIdx: 0, holding: false, broken: false, done: false });
   def.sections.forEach((S, si) => {
     const sec = song.sections[si], n = S.lanes || 4;
-    if (S.laneChange) laneChanges.push({ t: sec.start, lanes: n });
+    if (S.laneChange) {
+      const prevSeg = tempo.segOfBar(Math.max(0, sec.bar0 - 1));
+      laneChanges.push({ t: sec.start, lanes: n, instant: !!S.instant, critical: !!S.critical, warnAt: sec.start - prevSeg.barLen });
+    }
     const fn = TAS_PATTERNS[S.pat]; if (!fn) return;
     for (let b = 0; b < S.bars; b++) {
-      const barT = sec.start + b * BAR;
+      const seg = tempo.segOfBar(sec.bar0 + b);
+      const BEAT = seg.beat, STEP = BEAT / 4;
+      const barT = tempo.beatToTime((sec.bar0 + b) * 4);
       const P = {
         S, b, n, rnd,
-        tap: (s, l) => { if (l >= 0 && l < n) notes.push(mk(barT + s * STEP, l, n)); },
-        at: (s, l) => { if (l >= 0 && l < n) notes.push(mk(barT + s * STEP, l, n)); },
-        hold: (s0, s1, l) => { if (l >= 0 && l < n) notes.push(mk(barT + s0 * STEP, l, n, barT + (s1 - 0.5) * STEP)); },
+        tap: (s, l) => { if (l >= 0 && l < n) notes.push(mk(barT + s * STEP, l, n, BEAT)); },
+        at: (s, l) => { if (l >= 0 && l < n) notes.push(mk(barT + s * STEP, l, n, BEAT)); },
+        hold: (s0, s1, l) => { if (l >= 0 && l < n) notes.push(mk(barT + s0 * STEP, l, n, BEAT, barT + (s1 - 0.5) * STEP)); },
       };
       fn(P);
     }
   });
   notes.sort((a, b) => a.t - b.t || a.lane - b.lane);
   // レーン内の衝突解決（32分未満の重なり / ホールド帯上のノーツを捨てる）
-  const out = []; const last = [null, null, null, null, null, null, null, null];
+  const out = []; const last = new Array(MAX_LANES).fill(null);
   notes.forEach(n => {
-    const g = n.lane + (8 - n.lanes) / 2;                  // 8レーン基準のレーン番号
+    const g = n.lane + (MAX_LANES - n.lanes) / 2;          // 16レーン基準のレーン番号
     const p = last[g];
     if (p) {
       const pEnd = p.type === 'hold' ? p.end : p.t;
-      if (n.t - pEnd < MIN - 1e-6) return;
+      if (n.t - pEnd < Math.min(p.bl, n.bl) / 8 - 1e-6) return;
     }
     last[g] = n; out.push(n);
   });
@@ -789,8 +962,8 @@ function buildTasChart(song) {
     points++;
     if (n.type !== 'hold') return;
     holds++;
-    const ticks = [];
-    for (let tt = n.t + BEAT / 2; tt < n.end - BEAT * 0.2; tt += BEAT / 2) ticks.push(tt);
+    const ticks = [], B = n.bl;
+    for (let tt = n.t + B / 2; tt < n.end - B * 0.2; tt += B / 2) ticks.push(tt);
     ticks.push(n.end);
     n.ticks = ticks; points += ticks.length;
   });
@@ -810,7 +983,7 @@ function chartStats(si, di) {
    ===================================================================== */
 const Music = (() => {
   const LOOKAHEAD = 0.25;
-  let ac = null, out = null, noiseBuf = null, distCurve = null;
+  let ac = null, master = null, out = null, sc = null, noiseBuf = null, distCurve = null;
   let events = [], songStart = 0, idx = 0, timer = null, active = [], playing = false, lastMuted = null;
 
   function setup() {
@@ -818,7 +991,9 @@ const Music = (() => {
     if (!a) return false;
     if (a !== ac) {
       ac = a;
-      out = ac.createGain(); out.gain.value = 0.55; out.connect(ac.destination);
+      master = ac.createGain(); master.gain.value = 0.55; master.connect(ac.destination);
+      out = ac.createGain(); out.gain.value = 1; out.connect(master);      // 楽器バス（テープストップで差し替える）
+      sc = null;
       const len = ac.sampleRate;
       noiseBuf = ac.createBuffer(1, len, ac.sampleRate);
       const d = noiseBuf.getChannelData(0);
@@ -850,6 +1025,11 @@ const Music = (() => {
   }
   function filt(type, f, q) { const x = ac.createBiquadFilter(); x.type = type; x.frequency.value = f; if (q != null) x.Q.value = q; return x; }
   function dist() { const ws = ac.createWaveShaper(); ws.curve = distCurve; ws.oversample = '2x'; return ws; }
+  /** サイドチェイン用ゲイン（キックで 0.2 → 1.0 に戻る）。バス差し替え後は作り直す */
+  function scNode() {
+    if (!sc || sc._bus !== out) { sc = ac.createGain(); sc.gain.value = 1; sc._bus = out; sc.connect(out); }
+    return sc;
+  }
   const vol = e => (e && e.vol != null ? e.vol : 1);
 
   const V = {
@@ -1024,6 +1204,51 @@ const Music = (() => {
         const o = osc(p[2], p[0], t, stop, p[1]); const og = ac.createGain(); og.gain.value = p[2] === 'square' ? 0.18 : 0.4; o.connect(og); og.connect(ws);
       });
     },
+    /* ---- カタストロフ∞ ---- */
+    strings(t, e) {
+      const r = e.root, third = e.minor && e.minor[r % 12] ? 3 : 4, stop = t + e.dur + 0.6, op = e.open || 0;
+      const lp = filt('lowpass', 400, 0.8);
+      lp.frequency.setValueAtTime(350 + op * 1200, t); lp.frequency.exponentialRampToValueAtTime(900 + op * 2600, t + e.dur);
+      const g = ac.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.03, t + 0.35);
+      g.gain.setValueAtTime(0.03, t + e.dur); g.gain.exponentialRampToValueAtTime(0.0001, t + e.dur + 0.5);
+      lp.connect(g); g.connect(scNode());
+      [r + 12, r + 12 + third, r + 19, r + 24].forEach(m => {
+        [-8, 0, 8].forEach(d => { const o = osc('triangle', midiHz(m), t, stop, d); const og = ac.createGain(); og.gain.value = 0.33; o.connect(og); og.connect(lp); });
+      });
+    },
+    supersaw(t, e) {
+      const f = midiHz(e.midi), dur = Math.max(0.08, e.dur), v = vol(e) * 0.05, stop = t + dur + 0.12;
+      const ws = dist(); const lp = filt('lowpass', 3000, 1);
+      const g = ac.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(v, t + 0.01);
+      g.gain.setValueAtTime(v, t + Math.max(0.01, dur - 0.04)); g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.08);
+      ws.connect(lp); lp.connect(g); g.connect(scNode());
+      [-24, -14, -5, 5, 14, 24].forEach(d => { const o = osc('sawtooth', f, t, stop, d); const og = ac.createGain(); og.gain.value = 0.2; o.connect(og); og.connect(ws); });
+      const sub = osc('sawtooth', f / 2, t, stop); const sg = ac.createGain(); sg.gain.value = 0.25; sub.connect(sg); sg.connect(ws);
+    },
+    pump(t) {
+      const n = scNode();
+      n.gain.cancelScheduledValues(t); n.gain.setValueAtTime(0.2, t); n.gain.linearRampToValueAtTime(1, t + 0.2);
+    },
+    priser(t, e) {
+      const f = midiHz(e.midi), dur = e.dur;
+      const o = osc('sawtooth', f, t, t + dur + 0.05); o.frequency.setValueAtTime(f, t); o.frequency.exponentialRampToValueAtTime(f * 4, t + dur);
+      const lp = filt('lowpass', 1200, 2); lp.frequency.setValueAtTime(1200, t); lp.frequency.exponentialRampToValueAtTime(6000, t + dur);
+      const g = ac.createGain(); g.gain.setValueAtTime(0.03, t); g.gain.exponentialRampToValueAtTime(0.1, t + dur); g.gain.setValueAtTime(0.0001, t + dur + 0.01);
+      o.connect(lp); lp.connect(g); g.connect(out);
+    },
+    tapestop(t, e) {
+      // レコードストップ: 鳴っている全オシレータのピッチを 0.4 秒で 1/8 に落とし、バスをフェードアウト → 無音 → 新バスをドロップ時刻に開く
+      const old = out;
+      active.forEach(a => {
+        const n = a.n; if (!n.frequency) return;
+        try { const f = n.frequency.value; n.frequency.cancelScheduledValues(t); n.frequency.setValueAtTime(f, t); n.frequency.exponentialRampToValueAtTime(Math.max(1, f / 8), t + 0.4); } catch (err) { /* ignore */ }
+      });
+      old.gain.cancelScheduledValues(t); old.gain.setValueAtTime(1, t); old.gain.exponentialRampToValueAtTime(0.001, t + 0.4); old.gain.setValueAtTime(0, t + 0.41);
+      const s = noiseSrc(t, 0.4); const f = filt('lowpass', 4000); f.frequency.setValueAtTime(4000, t); f.frequency.exponentialRampToValueAtTime(150, t + 0.4);
+      s.connect(f); f.connect(gainEnv(t, 0.01, 0.12, 0.0001, t + 0.4));
+      out = ac.createGain(); out.gain.setValueAtTime(0, t); out.gain.setValueAtTime(1, t + (e.gap || 1)); out.connect(master);
+      sc = null;
+    },
     /* ---- バラード ---- */
     piano(t, e) {
       const f = midiHz(e.midi), v = vol(e) * 0.11, dur = e.dur;
@@ -1091,6 +1316,7 @@ const Music = (() => {
     if (!ac) return;
     active.forEach(a => { try { a.n.stop(0); } catch (err) { /* already stopped */ } });
     active = [];
+    try { out.gain.cancelScheduledValues(0); out.gain.value = 1; if (sc) { sc.gain.cancelScheduledValues(0); sc.gain.value = 1; } } catch (err) { /* ignore */ }
   }
   function seek(songTime, newStart) {
     stopAll();
@@ -1109,9 +1335,9 @@ const Music = (() => {
     pause() { playing = false; clearInterval(timer); timer = null; stopAll(); },
     stop() { playing = false; clearInterval(timer); timer = null; stopAll(); },
     tick() {
-      if (!out) return;
+      if (!master) return;
       const m = FES.isMuted();
-      if (m !== lastMuted) { out.gain.value = m ? 0 : 0.55; lastMuted = m; }
+      if (m !== lastMuted) { master.gain.value = m ? 0 : 0.55; lastMuted = m; }
     },
   };
 })();
@@ -1130,13 +1356,13 @@ const G = {
   counts: { PERFECT: 0, GREAT: 0, GOOD: 0, MISS: 0 },
   songStart: 0, pausedSongTime: 0, prevState: 'play', readyUntil: 0, countStage: 0,
   failed: false, fever: 0, feverAmt: 0, endAt: 0, offset: 0,
-  auto: false, laneChanges: [], laneChgIdx: 0, warnIdx: 0,
+  auto: false, laneChanges: [], laneChgIdx: 0, warnIdx: 0, themeIdx: 0, frozen: false,
 };
 const FX = {
   particles: [], rings: [], texts: [], bolts: [], streaks: [],
-  flash: [0, 0, 0, 0, 0, 0, 0, 0], press: [0, 0, 0, 0, 0, 0, 0, 0],
+  flash: new Array(MAX_LANES).fill(0), press: new Array(MAX_LANES).fill(0),
   judge: null, comboPop: 0, shake: 0, count: null, gaugeFlash: 0, streakTimer: 1.5,
-  laneAnim: null, warn: null, newLaneUntil: 0, newLanes: [],
+  laneAnim: null, warn: null, newLaneUntil: 0, newLanes: [], bang: -9, critical: false,
 };
 const VIS = { kick: 0, snare: 0, hat: 0, bass: 0, lead: 0, bands: new Float32Array(14) };
 const STARS = [];
@@ -1154,19 +1380,28 @@ const approach = () => G.song.def.approach || DIFFS[G.diff].approach;
 const isTas = () => !!G.song.def.tas;
 /** ノーツ/ポインタのレーン番号を「現在のレーン数」での番号に変換（旧レーンは中央に寄る） */
 const effLane = n => n.lane + (LANES - n.lanes) / 2;
-/** レーン数を切り替える（TAS曲）。animate=true で 0.5 秒の展開アニメ + 新レーン強調 */
-function setLanes(n, now, animate) {
+/** 拍の位相（0..1）。テンポマップ対応。タイトル中は now を使う */
+function beatPhase(st) {
+  const b = (G.state === 'title' || G.state === 'calib') ? st / BEAT() : G.song.tempo.timeToBeat(st);
+  return ((b % 1) + 1) % 1;
+}
+/** レーン数を切り替える（TAS曲）。animate=true で展開アニメ + 新レーン強調。lc.instant なら 0.15 秒で瞬間拡張 */
+function setLanes(n, now, animate, lc) {
   if (n === LANES) return;
-  const from = L.botW;
+  const from = L.botW, added = n - LANES;
   LANES = n;
   KEY_TO_LANE = laneKeyMap(n); KEY_LABELS = KEY_LABEL_SETS[n];
   resize();
   if (animate) {
-    FX.laneAnim = { t0: now, dur: 0.5, from };
+    const instant = !!(lc && lc.instant);
+    FX.laneAnim = { t0: now, dur: instant ? 0.15 : 0.5, from };
     L.botW = from; L.topW = from * 0.36;
-    FX.newLaneUntil = now + 2; FX.newLanes = [0, n - 1];
-    FX.shake = Math.max(FX.shake, 14);
-    FX.texts.push({ text: `${n} LANES!`, t: now, color: '#ff2878' });
+    FX.newLaneUntil = now + 2; FX.newLanes = [];
+    for (let i = 0; i < added / 2; i++) { FX.newLanes.push(i); FX.newLanes.push(n - 1 - i); }
+    FX.shake = Math.max(FX.shake, instant ? 22 : 14);
+    if (instant) { FX.bang = now; FES.tone({ freq: 90, dur: 0.5, type: 'square', vol: 0.25 }); FES.tone({ freq: 1800, slide: 200, dur: 0.3, type: 'sawtooth', vol: 0.15 }); }
+    if (lc && lc.critical) { FX.critical = true; FX.texts.push({ text: 'CRITICAL', t: now, color: '#ff2040' }); FES.tone({ freq: 70, dur: 0.8, type: 'sawtooth', vol: 0.22 }); }
+    else FX.texts.push({ text: `${n} LANES!`, t: now, color: '#ff2878' });
     FES.tone({ freq: 220, slide: 880, dur: 0.35, type: 'sawtooth', vol: 0.18 });
   }
 }
@@ -1285,8 +1520,8 @@ function buildCards() {
     const card = document.createElement('div'); card.className = 'card' + (def.tas ? ' tas' : '');
     card.style.setProperty('--c', def.hex); card.style.setProperty('--cr', def.color.join(','));
     card.innerHTML = `<div class="sel-mark"></div><div class="cg">${def.genre}</div><div class="cn">${def.name}</div>` +
-      `<div class="cm">${def.bpm} BPM ・ ${fmtLen(SONG_DATA[i].length)}</div><div class="cs" data-s></div><div class="ch" data-h></div>` +
-      (def.tas ? '<div class="skull">☠ 人力クリア不可</div>' : '');
+      `<div class="cm">${def.bpmLabel || def.bpm} BPM ・ ${fmtLen(SONG_DATA[i].length)}</div><div class="cs" data-s></div><div class="ch" data-h></div>` +
+      (def.tas ? '<div class="skull">☠ 人力クリア不可</div>' : '') + (def.sudden ? '<div class="skull sudden">⚡ 急変注意</div>' : '');
     card.addEventListener('click', () => { if (G.state !== 'title') return; if (G.songIdx === i) startGame(); else { setSong(i); FES.sfx('select'); } });
     box.appendChild(card);
   });
@@ -1318,11 +1553,11 @@ function setDiff(i) {
   refreshCards();
 }
 function resetGame() {
+  FX.laneAnim = null; FX.warn = null; FX.newLaneUntil = 0; FX.newLanes = []; FX.bang = -9; FX.critical = false;
+  setLanes(4, 0, false);
   const chart = buildChart(G.song, G.diff);
   G.notes = chart.notes; G.maxRaw = chart.maxRaw; G.points = chart.points; G.holds = [];
-  G.laneChanges = chart.laneChanges || []; G.laneChgIdx = 0; G.warnIdx = 0;
-  FX.laneAnim = null; FX.warn = null; FX.newLaneUntil = 0; FX.newLanes = [];
-  setLanes(4, 0, false);
+  G.laneChanges = chart.laneChanges || []; G.laneChgIdx = 0; G.warnIdx = 0; G.themeIdx = 0; G.frozen = false;
   G.nextIdx = 0; G.drawIdx = 0; G.visIdx = 0;
   G.raw = 0; G.score = 0; G.dispScore = 0; G.combo = 0; G.maxCombo = 0; G.gauge = 60;
   G.counts = { PERFECT: 0, GREAT: 0, GOOD: 0, MISS: 0 };
@@ -1564,7 +1799,8 @@ function spawnSpark(lane, n) {
 function update(dt, now) {
   Music.tick();
   const dec = k => Math.max(0, k - dt);
-  for (let l = 0; l < 8; l++) { FX.flash[l] = Math.max(0, FX.flash[l] - dt * 4); if (!lanePressed(l)) FX.press[l] = Math.max(0, FX.press[l] - dt * 8); else FX.press[l] = 1; }
+  for (let l = 0; l < MAX_LANES; l++) { FX.flash[l] = Math.max(0, FX.flash[l] - dt * 4); if (!lanePressed(l)) FX.press[l] = Math.max(0, FX.press[l] - dt * 8); else FX.press[l] = 1; }
+  if (FX.critical && G.state === 'play') FX.shake = Math.max(FX.shake, 2.5);
   if (FX.laneAnim) {
     const k = FES.clamp((now - FX.laneAnim.t0) / FX.laneAnim.dur, 0, 1), e = 1 - Math.pow(1 - k, 3);
     L.botW = FES.lerp(FX.laneAnim.from, L.botWTarget, e); L.topW = L.botW * 0.36;
@@ -1574,7 +1810,7 @@ function update(dt, now) {
   FX.shake = Math.max(0, FX.shake - dt * 30);
   FX.gaugeFlash = dec(FX.gaugeFlash * 2) / 2;
   VIS.kick *= Math.pow(0.02, dt); VIS.snare *= Math.pow(0.03, dt); VIS.hat *= Math.pow(0.001, dt); VIS.bass *= Math.pow(0.05, dt); VIS.lead *= Math.pow(0.08, dt);
-  updateBackground(dt, now);
+  if (!G.frozen) updateBackground(dt, now);
 
   G.fever = G.combo >= 100 ? 2 : G.combo >= 50 ? 1 : 0;
   G.feverAmt += (G.fever - G.feverAmt) * Math.min(1, dt * 3);
@@ -1625,15 +1861,25 @@ function update(dt, now) {
   }
   if (G.state === 'play' || G.state === 'countin') {
     const jt = st - G.offset / 1000;
-    // レーン増加（TAS曲）: 1小節前に警告 → 切り替え時に展開アニメ
+    // レーン増加（TAS曲）: 1小節前に警告 → 切り替え時に展開アニメ（instant は警告なしで瞬間拡張）
     const LC = G.laneChanges;
-    if (G.warnIdx < LC.length && st >= LC[G.warnIdx].t - G.song.bar) {
-      const lc = LC[G.warnIdx++];
-      FX.warn = { t: now, until: now + Math.min(G.song.bar, 1.2), text: `WARNING: LANE +${lc.lanes - LANES}` };
-      FES.tone({ freq: 110, dur: 0.3, type: 'square', vol: 0.2 }); FES.tone({ freq: 110, dur: 0.3, type: 'square', vol: 0.2, delay: 0.4 });
-      FX.shake = Math.max(FX.shake, 6);
+    if (G.warnIdx < LC.length) {
+      const lc = LC[G.warnIdx];
+      if (lc.instant) G.warnIdx++;
+      else if (st >= lc.warnAt) {
+        G.warnIdx++;
+        FX.warn = { t: now, until: now + Math.min(lc.t - lc.warnAt, 1.2), text: `WARNING: LANE +${lc.lanes - LANES}` };
+        FES.tone({ freq: 110, dur: 0.3, type: 'square', vol: 0.2 }); FES.tone({ freq: 110, dur: 0.3, type: 'square', vol: 0.2, delay: 0.4 });
+        FX.shake = Math.max(FX.shake, 6);
+      }
     }
-    if (G.laneChgIdx < LC.length && st >= LC[G.laneChgIdx].t - 0.08) setLanes(LC[G.laneChgIdx++].lanes, now, true);
+    if (G.laneChgIdx < LC.length && st >= LC[G.laneChgIdx].t - (LC[G.laneChgIdx].instant ? 0.02 : 0.08)) { const lc = LC[G.laneChgIdx++]; setLanes(lc.lanes, now, true, lc); }
+    // テーマ切替 / フェイク停止
+    const TC = G.song.themeChanges || [];
+    while (G.themeIdx < TC.length && st >= TC[G.themeIdx].t) setTheme(TC[G.themeIdx++].theme);
+    G.frozen = false;
+    const FZ = G.song.freezes || [];
+    for (let i = 0; i < FZ.length; i++) if (st >= FZ[i].from && st < FZ[i].to) G.frozen = true;
     if (!G.failed) {
       if (G.auto) {
         // オートプレイ: 時刻が来たノーツを全 PERFECT で処理
@@ -1707,16 +1953,37 @@ function idleVis(now) {
    ===================================================================== */
 function render(now) {
   const st = (G.state === 'title' || G.state === 'calib') ? now : songTime();
+  const frozen = G.frozen && G.state !== 'title';
   ctx.save();
-  if (FX.shake > 0.2) ctx.translate((Math.random() - 0.5) * FX.shake, (Math.random() - 0.5) * FX.shake);
+  if (frozen) { try { ctx.filter = 'grayscale(1) brightness(0.7)'; } catch (e) { /* ignore */ } }
+  if (FX.shake > 0.2 && !frozen) ctx.translate((Math.random() - 0.5) * FX.shake, (Math.random() - 0.5) * FX.shake);
   drawBackground(st, now);
-  drawLanes(now);
+  drawLanes(frozen ? 0 : now);
   if (G.state !== 'title' && G.state !== 'calib') { drawHolds(st, now); drawNotes(st, now); }
   drawEffects(now);
-  drawPads(now);
+  drawPads(frozen ? 0 : now);
   ctx.restore();
+  if (frozen) {
+    ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(0, 0, L.W, L.H);
+    glowText('…', L.cx, L.topY + (L.judgeY - L.topY) * 0.42, Math.min(90, L.botW * 0.2), 'rgba(255,255,255,0.85)', '#fff', 900, 10);
+  }
   if (G.state !== 'title' && G.state !== 'calib') drawHUD(now);
   drawCenterText(now);
+  // 瞬間拡張の「!!!」赤フラッシュ / CRITICAL ビネット
+  const bangAge = now - FX.bang;
+  if (bangAge >= 0 && bangAge < 0.6 && G.state !== 'title') {
+    const k = 1 - bangAge / 0.6;
+    ctx.fillStyle = `rgba(255,20,60,${0.55 * k * k})`; ctx.fillRect(0, 0, L.W, L.H);
+    const sc = bangAge < 0.1 ? 2.2 - bangAge / 0.1 * 1.2 : 1;
+    glowText('!!!', L.cx, L.topY + (L.judgeY - L.topY) * 0.42, Math.min(140, L.botW * 0.3) * sc, '#fff', '#ff2040', 900, 30);
+  }
+  if (FX.critical && G.state !== 'title' && G.state !== 'result') {
+    const k = 0.5 + 0.5 * Math.sin(now * 5);
+    const vg = ctx.createRadialGradient(L.cx, L.H * 0.5, L.H * 0.25, L.cx, L.H * 0.5, L.H * 0.85);
+    vg.addColorStop(0, 'rgba(255,0,40,0)'); vg.addColorStop(1, `rgba(255,0,40,${0.22 + 0.2 * k})`);
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, L.W, L.H);
+    fillText('CRITICAL', L.cx, L.judgeY + 12, 11, `rgba(255,120,140,${0.4 + 0.5 * k})`, 900);
+  }
 }
 
 function drawBackground(st, now) {
@@ -1737,7 +2004,7 @@ function drawBackground(st, now) {
   ctx.fillStyle = rg; ctx.fillRect(0, 0, W, H);
 
   // 星
-  const starN = Math.min(STARS.length, T.starN), slow = T.fx === 'shooting';
+  const starN = Math.min(STARS.length, T.starN), slow = T.fx === 'shooting' || T.slowStars;
   for (let i = 0; i < starN; i++) {
     const s = STARS[i];
     const tw = 0.45 + 0.55 * Math.sin(now * (slow ? 1.2 : 3) + s.p);
@@ -1799,7 +2066,7 @@ function drawBackground(st, now) {
   }
 
   // 透視グリッド（拍に同期して手前へ流れる）
-  const beat = ((st / BEAT()) % 1 + 1) % 1;
+  const beat = beatPhase(st);
   const rows = 14;
   ctx.lineWidth = 1;
   const gridCol = z => fv > 0.02 ? `hsla(${(hue + 180 + z * 120) % 360},100%,70%,` : `rgba(${T.grid[0]},${T.grid[1]},${T.grid[2]},`;
@@ -1929,6 +2196,7 @@ function drawHolds(st, now) {
 function drawNotes(st, now) {
   const notes = G.notes, ap = approach();
   const range = L.judgeY - L.topY;
+  const simple = LANES >= 12;
   ctx.lineWidth = 1;
   for (let i = G.drawIdx; i < notes.length; i++) {
     const n = notes[i];
@@ -1955,15 +2223,22 @@ function drawNotes(st, now) {
     else if (f < 0.12) alpha = FES.clamp((f + 0.05) / 0.17, 0, 1);
     if (alpha <= 0) continue;
     const x = laneX(el, y), w = x[1] - x[0];
-    const h = (8 + 16 * FES.clamp(f, 0, 1.2)) * (active ? 1 + 0.15 * Math.sin(now * 22) : 1);
+    const h = (LANES >= 12 ? 6 + 10 * FES.clamp(f, 0, 1.2) : 8 + 16 * FES.clamp(f, 0, 1.2)) * (active ? 1 + 0.15 * Math.sin(now * 22) : 1);
     const nx = x[0] + w * 0.07, nw = w * 0.86;
-    ctx.fillStyle = rgba(c, (active ? 0.4 : 0.22) * alpha);
-    rr(nx - 4, y - h, nw + 8, h * 2, h); ctx.fill();
-    const gg = ctx.createLinearGradient(0, y - h / 2, 0, y + h / 2);
-    gg.addColorStop(0, `rgba(255,255,255,${alpha})`); gg.addColorStop(0.35, rgba(c, alpha)); gg.addColorStop(1, rgba([c[0] * 0.55, c[1] * 0.55, c[2] * 0.55], alpha));
-    ctx.fillStyle = gg;
-    rr(nx, y - h / 2, nw, h, h / 2); ctx.fill();
-    ctx.strokeStyle = `rgba(255,255,255,${0.7 * alpha})`; ctx.lineWidth = 1.5; ctx.stroke();
+    if (simple) {
+      // 多レーン時は装飾を省略（フラット塗り）
+      ctx.fillStyle = rgba(c, alpha);
+      rr(nx, y - h / 2, nw, h, h / 2); ctx.fill();
+      ctx.strokeStyle = `rgba(255,255,255,${0.6 * alpha})`; ctx.lineWidth = 1; ctx.stroke();
+    } else {
+      ctx.fillStyle = rgba(c, (active ? 0.4 : 0.22) * alpha);
+      rr(nx - 4, y - h, nw + 8, h * 2, h); ctx.fill();
+      const gg = ctx.createLinearGradient(0, y - h / 2, 0, y + h / 2);
+      gg.addColorStop(0, `rgba(255,255,255,${alpha})`); gg.addColorStop(0.35, rgba(c, alpha)); gg.addColorStop(1, rgba([c[0] * 0.55, c[1] * 0.55, c[2] * 0.55], alpha));
+      ctx.fillStyle = gg;
+      rr(nx, y - h / 2, nw, h, h / 2); ctx.fill();
+      ctx.strokeStyle = `rgba(255,255,255,${0.7 * alpha})`; ctx.lineWidth = 1.5; ctx.stroke();
+    }
     if (n.type === 'hold' && n.state === 0) {
       // ホールド頭の印（中央の白いバー）
       ctx.fillStyle = `rgba(255,255,255,${0.85 * alpha})`;
@@ -2038,7 +2313,7 @@ function drawPads(now) {
     const x = laneX(l, L.judgeY), w = x[1] - x[0];
     const isNew = newK > 0 && FX.newLanes.indexOf(l) >= 0;
     const p = Math.max(FX.press[l], isNew ? newK : 0);
-    const inset = LANES > 4 ? 3 : 5, sc = 1 - FX.press[l] * 0.05;
+    const inset = LANES >= 12 ? 1.5 : LANES > 4 ? 3 : 5, sc = 1 - FX.press[l] * 0.05;
     const pw = (w - inset * 2) * sc, phh = ph * sc;
     const px = x[0] + inset + (w - inset * 2 - pw) / 2, py = L.padTop + (ph - phh) / 2;
     const c = laneRGB(l);
@@ -2046,7 +2321,7 @@ function drawPads(now) {
     gg.addColorStop(0, rgba(c, 0.12 + p * 0.6)); gg.addColorStop(1, rgba(c, 0.05 + p * 0.3));
     rr(px, py, pw, phh, 14); ctx.fillStyle = gg; ctx.fill();
     ctx.strokeStyle = isNew ? `rgba(255,255,255,${0.5 + newK * 0.5})` : rgba(c, 0.55 + p * 0.45); ctx.lineWidth = 2 + p * 2; ctx.stroke();
-    const fs = Math.min(phh * 0.42, pw * 0.36, 44) * (isNew ? 1.2 : 1);
+    const fs = Math.max(8, Math.min(phh * 0.42, pw * (LANES >= 12 ? 0.6 : 0.36), 44)) * (isNew ? 1.2 : 1);
     fillText(KEY_LABELS[l], px + pw / 2, py + phh * 0.46, fs, `rgba(255,255,255,${0.7 + p * 0.3})`, 900);
     if (phh > 60 && LANES === 4) fillText(ARROW_LABELS[l], px + pw / 2, py + phh * 0.46 + fs * 0.85, fs * 0.5, rgba(c, 0.9), 900);
     else if (phh > 60 && isNew) fillText('NEW', px + pw / 2, py + phh * 0.46 + fs * 0.85, fs * 0.4, `rgba(255,255,255,${newK})`, 900);
@@ -2221,7 +2496,7 @@ document.addEventListener('keydown', e => {
     if (KEY_TO_LANE[code] != null || code === 'Space' || code === 'Enter') calibTap();
     return;
   }
-  if (code === 'Escape' || code === 'KeyP') {
+  if (code === 'Escape' || (code === 'KeyP' && (G.state === 'pause' || KEY_TO_LANE.KeyP == null))) {   // 12/16 レーン中は P はレーンキー
     if (e.repeat) return;
     if (G.state === 'pause') resumeGame(); else pauseGame();
     return;
@@ -2294,7 +2569,7 @@ requestAnimationFrame(frame);
 
 // ヘッドレス検証用フック（ゲーム動作には影響しない）
 window.RHYTHM = { SONGS, SONG_DATA, DIFFS, G, buildChart, chartStats, calcOffset, setSong, setDiff, startGame, update, songTime, judgeTime,
-  press: keyPress, release: keyRelease, hitLane, releaseLane, keysDown, pointers, Music, render, lanes: () => LANES, keyMap: () => KEY_TO_LANE, L };
+  press: keyPress, release: keyRelease, hitLane, releaseLane, keysDown, pointers, Music, render, lanes: () => LANES, keyMap: () => KEY_TO_LANE, L, FX, makeTempo };
 </script>
 </body>
 </html>
