@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>文化祭ゲームセンター</title>
+<style>
+  :root {
+    --bg: #07071a;
+    --card: rgba(255,255,255,.06);
+    --line: rgba(255,255,255,.14);
+    --text: #f4f4ff;
+    --muted: rgba(244,244,255,.65);
+    --gold: #ffd36e;
+    --pink: #ff4d8d;
+    --cyan: #5ee7ff;
+    --violet: #8b6bff;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Noto Sans JP","Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif;
+    overflow-x: hidden; overflow-y: auto;
+    -webkit-font-smoothing: antialiased;
+  }
+  #bg { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; }
+  #app { position: relative; z-index: 1; max-width: 1240px; margin: 0 auto; padding: 24px 20px 60px; }
+
+  /* ---------- header ---------- */
+  header { text-align: center; padding: 18px 0 10px; position: relative; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px; padding: 6px 16px; border-radius: 999px; font-size: 13px; font-weight: 700; letter-spacing: .2em;
+    background: rgba(255,255,255,.08); border: 1px solid var(--line); color: var(--muted); margin-bottom: 14px;
+  }
+  .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #5cff8d; box-shadow: 0 0 10px #5cff8d; animation: blink 1.6s infinite; }
+  @keyframes blink { 50% { opacity: .3; } }
+  h1 {
+    margin: 0; font-size: clamp(34px, 7vw, 76px); font-weight: 900; line-height: 1.05; letter-spacing: .02em;
+    background: linear-gradient(90deg, #fff 0%, var(--gold) 25%, #fff 45%, var(--cyan) 65%, #fff 85%, var(--pink) 100%);
+    background-size: 300% auto; -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: shine 6s linear infinite; filter: drop-shadow(0 6px 30px rgba(139,107,255,.35));
+    cursor: text;
+  }
+  h1[contenteditable]:focus { outline: 2px dashed rgba(255,255,255,.4); outline-offset: 8px; border-radius: 12px; }
+  @keyframes shine { to { background-position: 300% center; } }
+  .sub { margin: 12px 0 0; color: var(--muted); font-size: clamp(14px, 2vw, 18px); font-weight: 600; letter-spacing: .1em; }
+  .hint { font-size: 12px; color: rgba(255,255,255,.35); margin-top: 6px; }
+
+  /* ---------- ticker ---------- */
+  .ticker { margin: 22px auto 30px; max-width: 900px; border-radius: 999px; border: 1px solid var(--line); background: rgba(0,0,0,.35); overflow: hidden; position: relative; height: 40px; }
+  .ticker::before, .ticker::after { content: ""; position: absolute; top: 0; bottom: 0; width: 60px; z-index: 2; pointer-events: none; }
+  .ticker::before { left: 0; background: linear-gradient(90deg, #0a0a22, transparent); }
+  .ticker::after { right: 0; background: linear-gradient(-90deg, #0a0a22, transparent); }
+  .ticker-track { display: flex; gap: 48px; white-space: nowrap; align-items: center; height: 100%; padding-left: 100%; animation: ticker 40s linear infinite; font-size: 14px; font-weight: 700; }
+  .ticker-track span b { color: var(--gold); }
+  .ticker-track span i { font-style: normal; color: var(--cyan); }
+  @keyframes ticker { to { transform: translateX(-100%); } }
+
+  /* ---------- grid ---------- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 18px; }
+  .card {
+    position: relative; display: block; text-decoration: none; color: inherit; border-radius: 22px; padding: 18px 18px 16px; min-height: 250px;
+    background: linear-gradient(160deg, rgba(255,255,255,.09), rgba(255,255,255,.03)); border: 1px solid var(--line);
+    box-shadow: 0 10px 30px rgba(0,0,0,.35); overflow: hidden; isolation: isolate;
+    transition: transform .18s cubic-bezier(.2,1.2,.4,1), box-shadow .18s, border-color .18s;
+    animation: cardIn .6s cubic-bezier(.2,1.2,.4,1) both;
+  }
+  @keyframes cardIn { from { opacity: 0; transform: translateY(24px) scale(.96); } }
+  .card::before {
+    content: ""; position: absolute; inset: -40% -40% auto auto; width: 220px; height: 220px; border-radius: 50%; z-index: -1;
+    background: radial-gradient(circle, var(--accent) 0%, transparent 65%); opacity: .35; transition: opacity .25s, transform .25s;
+  }
+  .card:hover, .card:focus-visible { transform: translateY(-6px) scale(1.02); border-color: var(--accent); box-shadow: 0 20px 50px rgba(0,0,0,.5), 0 0 0 1px var(--accent) inset, 0 0 40px color-mix(in srgb, var(--accent) 35%, transparent); outline: none; }
+  .card:hover::before { opacity: .7; transform: scale(1.3); }
+  .card:active { transform: translateY(-2px) scale(.99); }
+  .card .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .card .icon { width: 58px; height: 58px; border-radius: 16px; display: grid; place-items: center; font-size: 30px;
+    background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 40%, #000)); box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 45%, transparent); }
+  .card .genre { font-size: 11px; font-weight: 800; letter-spacing: .15em; padding: 5px 10px; border-radius: 999px; background: rgba(0,0,0,.35); border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent); color: var(--accent); }
+  .card h2 { margin: 0 0 6px; font-size: 21px; font-weight: 900; letter-spacing: .02em; }
+  .card p { margin: 0 0 12px; font-size: 13px; color: var(--muted); line-height: 1.55; min-height: 40px; }
+  .card .ctrl { font-size: 11px; color: rgba(255,255,255,.5); margin-bottom: 12px; }
+  .card .ctrl kbd { font-family: inherit; font-size: 10px; padding: 1px 6px; border-radius: 6px; border: 1px solid rgba(255,255,255,.25); background: rgba(0,0,0,.4); margin-right: 3px; }
+  .card .hs { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding-top: 10px; border-top: 1px dashed rgba(255,255,255,.15); }
+  .card .hs .lbl { font-size: 10px; letter-spacing: .2em; color: rgba(255,255,255,.5); font-weight: 800; }
+  .card .hs .val { font-size: 20px; font-weight: 900; color: var(--gold); font-variant-numeric: tabular-nums; }
+  .card .hs .who { font-size: 12px; color: var(--muted); max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .rankbtn { position: absolute; right: 12px; bottom: 12px; width: 34px; height: 34px; border-radius: 10px; border: 1px solid var(--line); background: rgba(0,0,0,.4); color: #fff; font-size: 16px; display: grid; place-items: center; cursor: pointer; opacity: .75; transition: .15s; z-index: 2; }
+  .card .rankbtn:hover { opacity: 1; background: var(--accent); transform: scale(1.1); }
+  .card.missing { opacity: .45; filter: grayscale(.6); pointer-events: none; }
+  .card.missing::after { content: "準備中"; position: absolute; inset: auto 14px 14px auto; font-size: 12px; font-weight: 900; color: #fff; background: rgba(0,0,0,.5); padding: 4px 10px; border-radius: 999px; }
+  .new { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); font-size: 10px; font-weight: 900; letter-spacing: .2em; color: #fff; padding: 3px 10px; border-radius: 999px; background: linear-gradient(90deg, var(--pink), #ffb347); box-shadow: 0 0 14px rgba(255,80,120,.6); }
+
+  /* ---------- footer ---------- */
+  footer { margin-top: 42px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; color: rgba(255,255,255,.4); font-size: 12px; }
+  .fbtn { padding: 8px 16px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255,255,255,.05); color: var(--muted); cursor: pointer; font-size: 12px; font-weight: 700; transition: .15s; }
+  .fbtn:hover { background: rgba(255,255,255,.14); color: #fff; }
+  .fbtn.danger:hover { background: rgba(255,60,80,.35); border-color: rgba(255,60,80,.6); }
+
+  /* ---------- modal ---------- */
+  .modal { position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center; background: rgba(3,3,14,.75); backdrop-filter: blur(8px); animation: fade .25s; }
+  .modal.open { display: flex; }
+  @keyframes fade { from { opacity: 0 } }
+  .mbox { width: min(92vw, 480px); max-height: 90vh; overflow: auto; border-radius: 24px; padding: 26px; background: linear-gradient(160deg, rgba(30,30,70,.97), rgba(10,10,30,.98)); border: 1px solid var(--line); box-shadow: 0 30px 80px rgba(0,0,0,.6); animation: pop .45s cubic-bezier(.2,1.4,.4,1); }
+  @keyframes pop { from { transform: scale(.8) translateY(30px); opacity: 0 } }
+  .mbox h3 { margin: 0 0 2px; font-size: 13px; letter-spacing: .3em; color: var(--muted); }
+  .mbox .t { font-size: 26px; font-weight: 900; margin: 0 0 16px; }
+  .rank { list-style: none; margin: 0 0 18px; padding: 0; font-variant-numeric: tabular-nums; }
+  .rank li { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; font-size: 15px; }
+  .rank li:nth-child(odd) { background: rgba(255,255,255,.05); }
+  .rank li:nth-child(1) { background: linear-gradient(90deg, rgba(255,211,110,.3), transparent); font-size: 18px; }
+  .rank .r { width: 34px; font-weight: 900; }
+  .rank li:nth-child(1) .r { color: var(--gold); } .rank li:nth-child(2) .r { color: #d9d9e6; } .rank li:nth-child(3) .r { color: #e8a26a; }
+  .rank .n { flex: 1; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rank .s { font-weight: 900; }
+  .rank .empty { text-align: center; color: var(--muted); padding: 24px 0; justify-content: center; }
+  .mact { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .act { padding: 12px 24px; border-radius: 14px; border: 0; font-size: 15px; font-weight: 900; cursor: pointer; color: #fff; background: linear-gradient(135deg,#6a5cff,#b04dff); box-shadow: 0 8px 24px rgba(120,80,255,.45); text-decoration: none; transition: .15s; }
+  .act.alt { background: rgba(255,255,255,.12); box-shadow: none; }
+  .act.danger { background: linear-gradient(135deg,#ff4d6d,#ff7b47); box-shadow: 0 8px 24px rgba(255,80,100,.4); }
+  .act:hover { transform: translateY(-2px); filter: brightness(1.12); }
+
+  @media (max-width: 600px) {
+    #app { padding: 16px 14px 40px; }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+    .card { min-height: 0; padding: 14px; }
+    .card p { display: none; }
+    .card .ctrl { display: none; }
+    .card .icon { width: 46px; height: 46px; font-size: 24px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div id="app">
+  <header>
+    <div class="badge"><span class="dot"></span> GAME CENTER · 10 GAMES · FREE PLAY</div>
+    <h1 id="title" contenteditable="true" spellcheck="false">文化祭ゲームセンター</h1>
+    <p class="sub">10種類のゲームで ハイスコアに挑戦しよう！</p>
+    <p class="hint">（タイトルはクリックで書きかえられます・自動保存）</p>
+  </header>
+
+  <div class="ticker"><div class="ticker-track" id="ticker"></div></div>
+
+  <div class="grid" id="grid"></div>
+
+  <footer>
+    <span>キーボード: ← → で選択 / Enter で開始</span>
+    <a class="fbtn" id="qrBtn" href="qr.html" style="text-decoration:none">📱 スマホ・他のPCで遊ぶ（QRコード）</a>
+    <button class="fbtn" id="fullBtn">⛶ 全画面</button>
+    <button class="fbtn" id="muteBtn">🔊 サウンド</button>
+    <button class="fbtn danger" id="resetBtn">🗑 ランキング全消去（スタッフ用）</button>
+  </footer>
+</div>
+
+<div class="modal" id="modal">
+  <div class="mbox">
+    <h3 id="mGenre">RANKING</h3>
+    <div class="t" id="mTitle">タイトル</div>
+    <ol class="rank" id="mRank"></ol>
+    <div class="mact">
+      <a class="act" id="mPlay" href="#">プレイする</a>
+      <button class="act alt" id="mClose">とじる</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="confirm">
+  <div class="mbox">
+    <h3>STAFF ONLY</h3>
+    <div class="t">全ゲームのランキングを消去しますか？</div>
+    <p style="color:var(--muted);font-size:14px;margin:0 0 18px">この操作はもとに戻せません。文化祭の開始前や日替わりのときに使ってください。</p>
+    <div class="mact">
+      <button class="act danger" id="cYes">消去する</button>
+      <button class="act alt" id="cNo">やめる</button>
+    </div>
+  </div>
+</div>
+
+<script src="common.js"></script>
+<script>
+'use strict';
+
+/* ============================== ゲーム一覧 ============================== */
+const GAMES = [
+  { id: 'rhythm',   title: 'リズムスターズ',       genre: '音楽',        icon: '🎵', accent: '#ff4d8d', desc: '4レーンに降ってくるノーツを、リズムに合わせて叩け！難易度3段階。', ctrl: ['D','F','J','K'] },
+  { id: 'shooter',  title: 'ギャラクシーブラスター', genre: 'シューティング', icon: '🚀', accent: '#5ee7ff', desc: '押し寄せる敵とボスを撃ち落とす縦スクロールSTG。パワーアップで無双。', ctrl: ['↑↓←→','Shift'] },
+  { id: 'puzzle',   title: 'ジュエルラッシュ',      genre: 'パズル',       icon: '💎', accent: '#b06bff', desc: '90秒のマッチ3タイムアタック。連鎖でスコアが爆発する。', ctrl: ['マウス','タッチ'] },
+  { id: 'typing',   title: 'タイピングバトル',      genre: 'タイピング',    icon: '⌨️', accent: '#5cff8d', desc: '60秒でどれだけ打てる？ローマ字入力でモンスターを倒せ。', ctrl: ['キーボード'] },
+  { id: 'racing',   title: 'ネオンドライブ',        genre: 'レース',       icon: '🏎️', accent: '#ff9f43', desc: '夕焼けのハイウェイを疾走する疑似3Dレース。ニトロで限界突破。', ctrl: ['← →','↑','Space'] },
+  { id: 'runner',   title: 'ダッシュ！ネコ忍者',    genre: 'アクション',    icon: '🐱', accent: '#ffd36e', desc: '走り続けるネコ忍者。ジャンプとスライドで障害物をかわし小判を集めろ。', ctrl: ['Space','↓'] },
+  { id: 'mole',     title: 'もぐらパニック',        genre: '反射神経',      icon: '🔨', accent: '#8bd346', desc: '60秒間のもぐらたたき。金もぐらとフィーバーで大量得点！', ctrl: ['クリック','タッチ'] },
+  { id: 'hockey',   title: 'ネオンエアホッケー',    genre: '対戦',         icon: '🏒', accent: '#3fd8ff', desc: '2人対戦 or CPU戦。マルチタッチ対応で友だちと白熱バトル。', ctrl: ['WASD','↑↓←→'] },
+  { id: 'quiz',     title: '早押しクイズ王',        genre: 'クイズ',       icon: '❓', accent: '#ff6b6b', desc: '4択クイズ10問。早く答えるほど高得点。ジャンル選択あり。', ctrl: ['1〜4','クリック'] },
+  { id: 'breakout', title: 'ネオンブレイカー',      genre: 'アーケード',    icon: '🧱', accent: '#a5f3fc', desc: 'ブロック崩し進化版。マルチボール・レーザーで全8ステージを攻略。', ctrl: ['← →','マウス'] },
+];
+
+/* ============================== タイトル保存 ============================== */
+const titleEl = document.getElementById('title');
+try { const t = localStorage.getItem('fes:title'); if (t) titleEl.textContent = t; } catch (e) {}
+titleEl.addEventListener('input', () => { try { localStorage.setItem('fes:title', titleEl.textContent.trim()); } catch (e) {} });
+titleEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); titleEl.blur(); } });
+
+/* ============================== カード生成 ============================== */
+const grid = document.getElementById('grid');
+let cards = [];
+function render() {
+  grid.innerHTML = ''; cards = [];
+  GAMES.forEach((g, i) => {
+    const rank = FES.getRanking(g.id);
+    const top = rank[0];
+    const a = document.createElement('a');
+    a.className = 'card'; a.href = `games/${g.id}.html`; a.style.setProperty('--accent', g.accent);
+    a.style.animationDelay = (i * 0.05) + 's';
+    a.dataset.idx = i;
+    a.innerHTML = `
+      <div class="top"><div class="icon">${g.icon}</div><div class="genre">${g.genre}</div></div>
+      <h2>${g.title}</h2>
+      <p>${g.desc}</p>
+      <div class="ctrl">${g.ctrl.map(c => `<kbd>${c}</kbd>`).join('')}</div>
+      <div class="hs">
+        <div><div class="lbl">HI-SCORE</div><div class="val">${top ? top.score.toLocaleString() : '---'}</div></div>
+        <div class="who">${top ? '👑 ' + esc(top.name) : 'まだ記録なし'}</div>
+      </div>
+      <div class="rankbtn" title="ランキング">🏆</div>`;
+    a.querySelector('.rankbtn').addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); openRank(g); });
+    a.addEventListener('click', () => FES.sfx('start'));
+    a.addEventListener('mouseenter', () => FES.sfx('select'));
+    a.addEventListener('focus', () => { sel = i; });
+    grid.appendChild(a); cards.push(a);
+  });
+  renderTicker();
+}
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+/* ============================== ティッカー ============================== */
+function renderTicker() {
+  const t = document.getElementById('ticker');
+  const items = [];
+  GAMES.forEach(g => {
+    const r = FES.getRanking(g.id);
+    if (r[0]) items.push(`<span>${g.icon} <i>${g.title}</i> 1位 <b>${esc(r[0].name)}</b> ${r[0].score.toLocaleString()} pt</span>`);
+  });
+  if (!items.length) items.push('<span>🎉 ようこそ！ 全ゲーム無料でプレイできます。ハイスコアを出して名前を残そう！</span>');
+  items.push('<span>⭐ ランキングは各ゲームで TOP10 まで記録されます</span>');
+  t.innerHTML = items.join('') + items.join('');
+  t.style.animationDuration = Math.max(25, items.length * 8) + 's';
+}
+
+/* ============================== ランキングモーダル ============================== */
+const modal = document.getElementById('modal');
+function openRank(g) {
+  FES.sfx('select');
+  document.getElementById('mGenre').textContent = g.genre + ' · RANKING';
+  document.getElementById('mTitle').textContent = g.icon + ' ' + g.title;
+  document.getElementById('mPlay').href = `games/${g.id}.html`;
+  const ol = document.getElementById('mRank'); ol.innerHTML = '';
+  const r = FES.getRanking(g.id);
+  if (!r.length) ol.innerHTML = '<li class="empty">まだ記録がありません。1番乗りになろう！</li>';
+  r.forEach((e, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="r">${i + 1}.</span><span class="n">${esc(e.name)}</span><span class="s">${e.score.toLocaleString()}</span>`;
+    ol.appendChild(li);
+  });
+  modal.classList.add('open');
+}
+document.getElementById('mClose').onclick = () => modal.classList.remove('open');
+modal.addEventListener('click', e => { if (e.target === modal) modal.classList.remove('open'); });
+
+/* ============================== フッター ============================== */
+document.getElementById('fullBtn').onclick = FES.toggleFullscreen;
+// QR ページはローカルサーバー（起動.bat / serve.js）で動かしているときだけ意味があるので、それ以外では隠す
+if (!/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) document.getElementById('qrBtn').style.display = 'none';
+const muteBtn = document.getElementById('muteBtn');
+const syncMute = () => muteBtn.textContent = FES.isMuted() ? '🔇 ミュート中' : '🔊 サウンド';
+syncMute();
+muteBtn.onclick = () => { FES.setMuted(!FES.isMuted()); syncMute(); if (!FES.isMuted()) FES.sfx('select'); };
+const confirmM = document.getElementById('confirm');
+document.getElementById('resetBtn').onclick = () => confirmM.classList.add('open');
+document.getElementById('cNo').onclick = () => confirmM.classList.remove('open');
+document.getElementById('cYes').onclick = () => {
+  GAMES.forEach(g => { try { localStorage.removeItem(`fes:${g.id}:ranking`); } catch (e) {} });
+  confirmM.classList.remove('open'); render(); FES.toast('ランキングを消去しました');
+};
+
+/* ============================== キーボード操作 ============================== */
+let sel = -1;
+document.addEventListener('keydown', e => {
+  if (modal.classList.contains('open') || confirmM.classList.contains('open')) { if (e.key === 'Escape') { modal.classList.remove('open'); confirmM.classList.remove('open'); } return; }
+  if (document.activeElement === titleEl) return;
+  const cols = Math.max(1, Math.round(grid.clientWidth / (cards[0] ? cards[0].offsetWidth + 18 : 250)));
+  let n = sel;
+  if (e.key === 'ArrowRight') n = Math.min(cards.length - 1, sel + 1);
+  else if (e.key === 'ArrowLeft') n = Math.max(0, sel - 1);
+  else if (e.key === 'ArrowDown') n = Math.min(cards.length - 1, sel + cols);
+  else if (e.key === 'ArrowUp') n = Math.max(0, sel - cols);
+  else if (e.key === 'Enter' && sel >= 0) { cards[sel].click(); return; }
+  else return;
+  e.preventDefault();
+  if (n < 0) n = 0;
+  sel = n; cards[sel].focus(); FES.sfx('select');
+});
+
+/* ============================== 背景アニメ ============================== */
+(function () {
+  const cv = document.getElementById('bg'); const ctx = cv.getContext('2d');
+  let W, H, t = 0;
+  const stars = [], confetti = [], lanterns = [];
+  const COLORS = ['#ff4d8d', '#ffd36e', '#5ee7ff', '#8b6bff', '#5cff8d', '#ff9f43'];
+  function resize() {
+    W = cv.width = innerWidth * Math.min(devicePixelRatio, 2); H = cv.height = innerHeight * Math.min(devicePixelRatio, 2);
+    cv.style.width = innerWidth + 'px'; cv.style.height = innerHeight + 'px';
+    stars.length = 0; for (let i = 0; i < 160; i++) stars.push({ x: Math.random() * W, y: Math.random() * H, r: Math.random() * 1.6 + .3, p: Math.random() * 6.28, s: Math.random() * .6 + .2 });
+    lanterns.length = 0; for (let i = 0; i < 9; i++) lanterns.push({ x: Math.random() * W, y: Math.random() * H, vy: -(Math.random() * .25 + .12) * devicePixelRatio, c: COLORS[i % COLORS.length], ph: Math.random() * 6.28, sz: (Math.random() * 14 + 16) * devicePixelRatio });
+  }
+  function spawnConfetti() {
+    if (confetti.length > 80) return;
+    confetti.push({ x: Math.random() * W, y: -20, vx: (Math.random() - .5) * .6, vy: (Math.random() * .8 + .5) * devicePixelRatio, r: Math.random() * 6.28, vr: (Math.random() - .5) * .1, c: COLORS[Math.floor(Math.random() * COLORS.length)], w: (Math.random() * 6 + 5) * devicePixelRatio, h: (Math.random() * 3 + 3) * devicePixelRatio, sw: Math.random() * 6.28 });
+  }
+  function frame() {
+    t += 1 / 60;
+    ctx.clearRect(0, 0, W, H);
+    // 背景グラデ
+    const g = ctx.createRadialGradient(W * .5, H * .1, 0, W * .5, H * .1, H * 1.1);
+    g.addColorStop(0, 'rgba(60,40,120,.45)'); g.addColorStop(.5, 'rgba(20,10,60,.2)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    // 星
+    for (const s of stars) { const a = .35 + .65 * (Math.sin(t * 2 * s.s + s.p) * .5 + .5); ctx.globalAlpha = a; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(s.x, s.y, s.r * devicePixelRatio, 0, 6.28); ctx.fill(); }
+    ctx.globalAlpha = 1;
+    // 提灯
+    for (const l of lanterns) {
+      l.y += l.vy; l.x += Math.sin(t * .7 + l.ph) * .3 * devicePixelRatio; if (l.y < -60) { l.y = H + 40; l.x = Math.random() * W; }
+      const glow = ctx.createRadialGradient(l.x, l.y, 0, l.x, l.y, l.sz * 3);
+      glow.addColorStop(0, l.c + '55'); glow.addColorStop(1, l.c + '00');
+      ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(l.x, l.y, l.sz * 3, 0, 6.28); ctx.fill();
+      ctx.fillStyle = l.c; ctx.globalAlpha = .55;
+      ctx.beginPath(); ctx.ellipse(l.x, l.y, l.sz * .7, l.sz, 0, 0, 6.28); ctx.fill();
+      ctx.globalAlpha = .8; ctx.fillStyle = '#1a1a2e'; ctx.fillRect(l.x - l.sz * .35, l.y - l.sz - 4 * devicePixelRatio, l.sz * .7, 4 * devicePixelRatio); ctx.fillRect(l.x - l.sz * .35, l.y + l.sz, l.sz * .7, 4 * devicePixelRatio);
+      ctx.globalAlpha = 1;
+    }
+    // 紙吹雪
+    if (Math.random() < .25) spawnConfetti();
+    for (let i = confetti.length - 1; i >= 0; i--) {
+      const c = confetti[i]; c.y += c.vy; c.x += c.vx + Math.sin(t * 3 + c.sw) * .5; c.r += c.vr;
+      if (c.y > H + 20) { confetti.splice(i, 1); continue; }
+      ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.r); ctx.scale(Math.cos(t * 4 + c.sw), 1); ctx.fillStyle = c.c; ctx.globalAlpha = .8; ctx.fillRect(-c.w / 2, -c.h / 2, c.w, c.h); ctx.restore();
+    }
+    requestAnimationFrame(frame);
+  }
+  addEventListener('resize', resize); resize(); frame();
+})();
+
+/* ============================== 起動 ============================== */
+FES.init({ id: 'hub', title: '', buttons: false });
+render();
+// 他タブ/ゲームから戻ってきたら最新ランキングに更新
+addEventListener('pageshow', render);
+addEventListener('storage', render);
+</script>
+</body>
+</html>

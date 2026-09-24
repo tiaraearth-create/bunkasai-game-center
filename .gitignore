@@ -1,0 +1,12 @@
+# ---- 公開しないもの（GitHub には index.html / common.js / games/ だけを入れる）----
+README.md
+SPEC.md
+serve.js
+qr.html
+qrcode.js
+起動.bat
+.claude/
+node_modules/
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,383 @@
+/* =====================================================================
+   FES  —  文化祭ゲーム共通ライブラリ
+   ---------------------------------------------------------------------
+   全ゲームで共通に使う「効果音 / ランキング / リザルト画面 / ホームボタン」。
+   外部依存なし。オフラインでも動作する。
+
+   使い方（最小）:
+     FES.init({ id: 'rhythm', title: 'リズムスターズ' });
+     FES.sfx('hit');                         // 効果音
+     FES.showResult({ score: 12345, stats:[{label:'MAX COMBO', value:120}] },
+                    () => restartGame());    // リザルト + ランキング登録
+   ===================================================================== */
+(function (global) {
+  'use strict';
+
+  const FES = {};
+  let cfg = { id: 'game', title: 'GAME', ranking: true };
+
+  /* ------------------------------------------------------------ 保存 */
+  const LS = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  };
+  const rankKey = id => `fes:${id}:ranking`;
+
+  FES.getRanking = function (id) {
+    return LS.get(rankKey(id || cfg.id), []);
+  };
+  FES.getHiScore = function (id) {
+    const r = FES.getRanking(id);
+    return r.length ? r[0].score : 0;
+  };
+  FES.saveScore = function (name, score, id) {
+    id = id || cfg.id;
+    const r = FES.getRanking(id);
+    r.push({ name: String(name || '???').slice(0, 8), score: Math.floor(score), date: Date.now() });
+    r.sort((a, b) => b.score - a.score || a.date - b.date);
+    const top = r.slice(0, 10);
+    LS.set(rankKey(id), top);
+    return top;
+  };
+  FES.isRankIn = function (score, id) {
+    const r = FES.getRanking(id);
+    return score > 0 && (r.length < 10 || score > r[r.length - 1].score);
+  };
+  FES.lastName = () => LS.get('fes:lastName', '');
+
+  /* ------------------------------------------------------------ 音 */
+  let actx = null;
+  let master = null;
+  let muted = LS.get('fes:muted', false);
+
+  function ensureAudio() {
+    if (!actx) {
+      try {
+        actx = new (global.AudioContext || global.webkitAudioContext)();
+        master = actx.createGain();
+        master.gain.value = muted ? 0 : 0.5;
+        master.connect(actx.destination);
+      } catch (e) { return null; }
+    }
+    if (actx.state === 'suspended') actx.resume();
+    return actx;
+  }
+  FES.audioContext = () => ensureAudio();
+  FES.unlockAudio = ensureAudio;
+  FES.setMuted = function (m) {
+    muted = !!m; LS.set('fes:muted', muted);
+    if (master) master.gain.value = muted ? 0 : 0.5;
+    const b = document.getElementById('fes-mute'); if (b) b.textContent = muted ? '🔇' : '🔊';
+  };
+  FES.isMuted = () => muted;
+
+  /**
+   * 汎用トーン。 FES.tone({freq:440, dur:0.1, type:'square', vol:0.3, slide:880, attack:0.005, decay:0.1})
+   */
+  FES.tone = function (o) {
+    const ac = ensureAudio(); if (!ac || muted) return;
+    o = o || {};
+    const t0 = ac.currentTime + (o.delay || 0);
+    const osc = ac.createOscillator();
+    const g = ac.createGain();
+    osc.type = o.type || 'square';
+    osc.frequency.setValueAtTime(o.freq || 440, t0);
+    if (o.slide) osc.frequency.exponentialRampToValueAtTime(Math.max(20, o.slide), t0 + (o.dur || 0.1));
+    const vol = o.vol == null ? 0.25 : o.vol;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + (o.attack || 0.005));
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + (o.dur || 0.1));
+    osc.connect(g); g.connect(master);
+    osc.start(t0); osc.stop(t0 + (o.dur || 0.1) + 0.05);
+  };
+  /** ノイズ（爆発・ヒット用） */
+  FES.noise = function (o) {
+    const ac = ensureAudio(); if (!ac || muted) return;
+    o = o || {};
+    const dur = o.dur || 0.2;
+    const t0 = ac.currentTime + (o.delay || 0);
+    const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * dur), ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const src = ac.createBufferSource(); src.buffer = buf;
+    const f = ac.createBiquadFilter(); f.type = o.filter || 'lowpass';
+    f.frequency.setValueAtTime(o.freq || 1200, t0);
+    if (o.slide) f.frequency.exponentialRampToValueAtTime(Math.max(40, o.slide), t0 + dur);
+    const g = ac.createGain();
+    g.gain.setValueAtTime(o.vol == null ? 0.3 : o.vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(f); f.connect(g); g.connect(master);
+    src.start(t0); src.stop(t0 + dur + 0.05);
+  };
+
+  /** プリセット効果音 */
+  const SFX = {
+    select:   () => FES.tone({ freq: 880, dur: 0.06, type: 'square', vol: 0.15 }),
+    start:    () => { [523, 659, 784, 1047].forEach((f, i) => FES.tone({ freq: f, dur: 0.12, delay: i * 0.08, type: 'square', vol: 0.2 })); },
+    hit:      () => FES.tone({ freq: 660, slide: 990, dur: 0.07, type: 'triangle', vol: 0.3 }),
+    perfect:  () => { FES.tone({ freq: 1320, dur: 0.08, type: 'sine', vol: 0.3 }); FES.tone({ freq: 1760, dur: 0.12, delay: 0.04, type: 'sine', vol: 0.2 }); },
+    miss:     () => FES.tone({ freq: 220, slide: 110, dur: 0.18, type: 'sawtooth', vol: 0.2 }),
+    coin:     () => { FES.tone({ freq: 988, dur: 0.06, type: 'square', vol: 0.2 }); FES.tone({ freq: 1319, dur: 0.18, delay: 0.06, type: 'square', vol: 0.2 }); },
+    jump:     () => FES.tone({ freq: 300, slide: 700, dur: 0.15, type: 'square', vol: 0.2 }),
+    explode:  () => { FES.noise({ dur: 0.4, freq: 900, slide: 80, vol: 0.4 }); FES.tone({ freq: 90, slide: 30, dur: 0.35, type: 'sine', vol: 0.4 }); },
+    shoot:    () => FES.tone({ freq: 1200, slide: 300, dur: 0.08, type: 'sawtooth', vol: 0.12 }),
+    powerup:  () => { [440, 554, 659, 880, 1108].forEach((f, i) => FES.tone({ freq: f, dur: 0.1, delay: i * 0.05, type: 'triangle', vol: 0.22 })); },
+    combo:    () => { FES.tone({ freq: 1047, dur: 0.05, type: 'square', vol: 0.15 }); FES.tone({ freq: 1568, dur: 0.1, delay: 0.05, type: 'square', vol: 0.15 }); },
+    bounce:   () => FES.tone({ freq: 500, slide: 350, dur: 0.06, type: 'triangle', vol: 0.25 }),
+    gameover: () => { [523, 494, 440, 392, 349].forEach((f, i) => FES.tone({ freq: f, dur: 0.25, delay: i * 0.18, type: 'triangle', vol: 0.25 })); },
+    fanfare:  () => { [523, 523, 523, 659, 784, 1047].forEach((f, i) => FES.tone({ freq: f, dur: i === 5 ? 0.6 : 0.14, delay: [0, .15, .3, .45, .6, .8][i], type: 'square', vol: 0.22 })); },
+    tick:     () => FES.tone({ freq: 1500, dur: 0.03, type: 'square', vol: 0.08 }),
+    countdown:() => FES.tone({ freq: 660, dur: 0.15, type: 'square', vol: 0.25 }),
+    go:       () => FES.tone({ freq: 1320, dur: 0.4, type: 'square', vol: 0.3 }),
+    wrong:    () => { FES.tone({ freq: 200, dur: 0.15, type: 'square', vol: 0.25 }); FES.tone({ freq: 160, dur: 0.25, delay: 0.15, type: 'square', vol: 0.25 }); },
+    correct:  () => { FES.tone({ freq: 1047, dur: 0.1, type: 'sine', vol: 0.3 }); FES.tone({ freq: 1568, dur: 0.25, delay: 0.1, type: 'sine', vol: 0.3 }); },
+  };
+  FES.sfx = function (name) { const f = SFX[name]; if (f) f(); };
+  FES.sfxNames = Object.keys(SFX);
+
+  /* ------------------------------------------------------------ CSS */
+  const CSS = `
+  #fes-ui, #fes-ui * { box-sizing: border-box; font-family: "Noto Sans JP","Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif; }
+  #fes-ui { position: fixed; inset: 0; pointer-events: none; z-index: 9000; }
+  .fes-btn { pointer-events: auto; position: fixed; top: 10px; width: 44px; height: 44px; border-radius: 12px; border: 1px solid rgba(255,255,255,.25);
+    background: rgba(0,0,0,.45); color: #fff; font-size: 20px; display: flex; align-items: center; justify-content: center; cursor: pointer;
+    backdrop-filter: blur(6px); transition: transform .12s, background .12s; text-decoration: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  .fes-btn:hover { transform: scale(1.08); background: rgba(255,255,255,.15); }
+  .fes-btn:active { transform: scale(.94); }
+  #fes-home { left: 10px; }
+  #fes-mute { right: 64px; }
+  #fes-full { right: 10px; }
+  #fes-overlay { pointer-events: auto; position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(5,5,20,.72); backdrop-filter: blur(8px); animation: fesFade .35s ease-out; }
+  @keyframes fesFade { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes fesPop { 0% { transform: scale(.7) translateY(30px); opacity: 0 } 60% { transform: scale(1.04) translateY(-4px); opacity: 1 } 100% { transform: scale(1) translateY(0) } }
+  @keyframes fesScore { from { transform: scale(2.2); opacity: 0 } to { transform: scale(1); opacity: 1 } }
+  @keyframes fesShine { 0% { background-position: -200% 0 } 100% { background-position: 200% 0 } }
+  .fes-card { width: min(92vw, 520px); max-height: 94vh; overflow: auto; border-radius: 24px; padding: 28px 28px 22px; color: #fff; text-align: center;
+    background: linear-gradient(160deg, rgba(30,30,70,.95), rgba(10,10,30,.97)); border: 1px solid rgba(255,255,255,.18);
+    box-shadow: 0 30px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.05) inset, 0 0 60px rgba(120,90,255,.25); animation: fesPop .5s cubic-bezier(.2,1.4,.4,1); }
+  .fes-card h2 { margin: 0 0 4px; font-size: 14px; letter-spacing: .35em; opacity: .7; font-weight: 600; }
+  .fes-card .fes-title { font-size: 26px; font-weight: 900; margin: 0 0 14px; letter-spacing: .05em;
+    background: linear-gradient(90deg,#fff,#ffd36e,#fff,#8ed6ff,#fff); background-size: 200% auto; -webkit-background-clip: text; background-clip: text; color: transparent; animation: fesShine 3s linear infinite; }
+  .fes-score { font-size: 56px; font-weight: 900; line-height: 1.1; margin: 8px 0 8px; font-variant-numeric: tabular-nums; animation: fesScore .6s cubic-bezier(.2,1.4,.4,1) .15s both; text-shadow: 0 0 30px rgba(255,220,120,.6); }
+  .fes-score small { font-size: 16px; opacity: .7; margin-left: 4px; }
+  .fes-sub { opacity: .8; font-size: 14px; margin-bottom: 14px; }
+  .fes-newrec { display: inline-block; margin: 6px 0 10px; padding: 4px 14px; border-radius: 999px; font-weight: 900; font-size: 13px; letter-spacing: .15em;
+    background: linear-gradient(90deg,#ff4d8d,#ffb347); box-shadow: 0 0 20px rgba(255,120,80,.6); animation: fesPop .6s .3s both; }
+  .fes-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px,1fr)); gap: 8px; margin: 12px 0 16px; }
+  .fes-stat { background: rgba(255,255,255,.07); border-radius: 12px; padding: 8px 6px; }
+  .fes-stat b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+  .fes-stat span { font-size: 11px; opacity: .65; letter-spacing: .1em; }
+  .fes-name { display: flex; gap: 8px; justify-content: center; margin: 8px 0 14px; }
+  .fes-name input { pointer-events: auto; width: 180px; font-size: 22px; text-align: center; padding: 8px 10px; border-radius: 12px; border: 2px solid rgba(255,255,255,.35);
+    background: rgba(0,0,0,.4); color: #fff; outline: none; font-weight: 700; letter-spacing: .1em; }
+  .fes-name input:focus { border-color: #ffd36e; box-shadow: 0 0 16px rgba(255,211,110,.5); }
+  .fes-name button { padding: 8px 18px; }
+  .fes-rank { text-align: left; margin: 0 0 14px; padding: 0; list-style: none; max-height: 220px; overflow: auto; font-variant-numeric: tabular-nums; }
+  .fes-rank li { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-radius: 8px; font-size: 14px; }
+  .fes-rank li:nth-child(odd) { background: rgba(255,255,255,.05); }
+  .fes-rank li.me { background: linear-gradient(90deg, rgba(255,211,110,.35), rgba(255,77,141,.25)); font-weight: 900; box-shadow: 0 0 0 1px rgba(255,211,110,.5) inset; }
+  .fes-rank .r { width: 28px; font-weight: 900; opacity: .8; }
+  .fes-rank .r.g1 { color: #ffd36e; } .fes-rank .r.g2 { color: #d9d9e6; } .fes-rank .r.g3 { color: #e8a26a; }
+  .fes-rank .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fes-rank .s { font-weight: 700; }
+  .fes-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .fes-act { pointer-events: auto; padding: 12px 26px; border-radius: 14px; border: 0; font-size: 16px; font-weight: 900; cursor: pointer; color: #fff; letter-spacing: .05em;
+    background: linear-gradient(135deg,#6a5cff,#b04dff); box-shadow: 0 8px 24px rgba(120,80,255,.45); transition: transform .12s, filter .12s; text-decoration: none; display: inline-block; }
+  .fes-act.alt { background: rgba(255,255,255,.12); box-shadow: none; }
+  .fes-act:hover { transform: translateY(-2px); filter: brightness(1.15); }
+  .fes-act:active { transform: translateY(1px) scale(.97); }
+  .fes-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); padding: 10px 18px; border-radius: 999px; background: rgba(0,0,0,.7); color: #fff;
+    font-size: 14px; font-weight: 700; pointer-events: none; animation: fesFade .3s; z-index: 9500; }
+  `;
+
+  /* ------------------------------------------------------------ UI */
+  function el(tag, attrs, children) {
+    const e = document.createElement(tag);
+    if (attrs) for (const k in attrs) {
+      if (k === 'text') e.textContent = attrs[k];
+      else if (k === 'html') e.innerHTML = attrs[k];
+      else if (k.startsWith('on')) e.addEventListener(k.slice(2), attrs[k]);
+      else e.setAttribute(k, attrs[k]);
+    }
+    (children || []).forEach(c => c && e.appendChild(c));
+    return e;
+  }
+
+  let ui = null;
+  function ensureUI() {
+    if (ui) return ui;
+    const style = document.createElement('style'); style.textContent = CSS; document.head.appendChild(style);
+    ui = el('div', { id: 'fes-ui' });
+    document.body.appendChild(ui);
+    return ui;
+  }
+
+  FES.init = function (o) {
+    cfg = Object.assign({ ranking: true, buttons: true }, o || {});
+    const build = () => {
+      ensureUI();
+      if (cfg.buttons !== false) {
+        ui.appendChild(el('a', { id: 'fes-home', class: 'fes-btn', href: '../index.html', title: 'ホームへ', text: '🏠', onclick: () => FES.sfx('select') }));
+        ui.appendChild(el('div', { id: 'fes-mute', class: 'fes-btn', title: 'ミュート', text: muted ? '🔇' : '🔊', onclick: () => { FES.setMuted(!muted); if (!muted) FES.sfx('select'); } }));
+        ui.appendChild(el('div', { id: 'fes-full', class: 'fes-btn', title: '全画面', text: '⛶', onclick: FES.toggleFullscreen }));
+      }
+      // 最初の操作で音を解放
+      const unlock = () => { ensureAudio(); };
+      ['pointerdown', 'keydown', 'touchstart'].forEach(ev => document.addEventListener(ev, unlock, { passive: true }));
+      // ページ内の a[href] クリック音
+      document.title = cfg.title ? `${cfg.title} | 文化祭ゲーム` : document.title;
+    };
+    if (document.body) build(); else document.addEventListener('DOMContentLoaded', build);
+    return FES;
+  };
+
+  FES.toggleFullscreen = function () {
+    const d = document;
+    if (!d.fullscreenElement) { (d.documentElement.requestFullscreen || function () {}).call(d.documentElement); }
+    else if (d.exitFullscreen) d.exitFullscreen();
+  };
+
+  FES.toast = function (msg, ms) {
+    ensureUI();
+    const t = el('div', { class: 'fes-toast', text: msg });
+    ui.appendChild(t);
+    setTimeout(() => t.remove(), ms || 1500);
+  };
+
+  let overlay = null;
+  FES.hideResult = function () { if (overlay) { overlay.remove(); overlay = null; } };
+
+  /**
+   * リザルト画面を表示する。
+   * FES.showResult({
+   *   score: 12345,             // 数値（大きいほど良い）
+   *   scoreLabel: 'pt',         // 単位（省略可）
+   *   title: 'GAME OVER',       // 見出し（省略可: 'RESULT'）
+   *   subtitle: 'ステージ3で撃墜',
+   *   stats: [{label:'MAX COMBO', value: 120}, ...],
+   *   ranking: true,            // false でランキング登録なし
+   *   retryLabel: 'もう一度',
+   * }, onRetry)
+   */
+  FES.showResult = function (o, onRetry) {
+    ensureUI(); FES.hideResult();
+    o = o || {};
+    const score = Math.max(0, Math.floor(o.score || 0));
+    const useRank = (o.ranking != null ? o.ranking : cfg.ranking) && score > 0;
+    const rankIn = useRank && FES.isRankIn(score);
+    if (rankIn) FES.sfx('fanfare'); else FES.sfx('gameover');
+
+    const card = el('div', { class: 'fes-card' });
+    card.appendChild(el('h2', { text: cfg.title || '' }));
+    card.appendChild(el('div', { class: 'fes-title', text: o.title || 'RESULT' }));
+    if (o.score != null) {
+      const s = el('div', { class: 'fes-score', text: score.toLocaleString() });
+      if (o.scoreLabel) s.appendChild(el('small', { text: o.scoreLabel }));
+      card.appendChild(s);
+    }
+    if (o.subtitle) card.appendChild(el('div', { class: 'fes-sub', text: o.subtitle }));
+    if (rankIn) {
+      const r = FES.getRanking();
+      const isTop = !r.length || score > r[0].score;
+      card.appendChild(el('div', { class: 'fes-newrec', text: isTop ? '★ NEW RECORD! 1位 ★' : '★ RANK IN! ★' }));
+    }
+    if (o.stats && o.stats.length) {
+      const g = el('div', { class: 'fes-stats' });
+      o.stats.forEach(st => g.appendChild(el('div', { class: 'fes-stat', html: `<b>${String(st.value)}</b><span>${st.label}</span>` })));
+      card.appendChild(g);
+    }
+
+    const rankBox = el('div');
+    card.appendChild(rankBox);
+
+    const renderRank = (mine) => {
+      rankBox.innerHTML = '';
+      if (!useRank) return;
+      const r = FES.getRanking();
+      if (!r.length) return;
+      const ul = el('ul', { class: 'fes-rank' });
+      r.forEach((e, i) => {
+        const li = el('li', { class: mine && e.date === mine ? 'me' : '' });
+        li.appendChild(el('span', { class: 'r g' + (i + 1), text: (i + 1) + '.' }));
+        li.appendChild(el('span', { class: 'n', text: e.name }));
+        li.appendChild(el('span', { class: 's', text: e.score.toLocaleString() }));
+        ul.appendChild(li);
+      });
+      rankBox.appendChild(ul);
+    };
+
+    const actions = el('div', { class: 'fes-actions' });
+    const retryBtn = el('button', { class: 'fes-act', text: o.retryLabel || 'もう一度' , onclick: () => { FES.sfx('start'); FES.hideResult(); onRetry && onRetry(); } });
+    const homeBtn = el('a', { class: 'fes-act alt', href: '../index.html', text: 'ホームへ' });
+    actions.appendChild(retryBtn); actions.appendChild(homeBtn);
+
+    if (rankIn) {
+      const input = el('input', { maxlength: '8', placeholder: 'なまえ', value: FES.lastName() });
+      const ok = el('button', { class: 'fes-act', text: '登録' });
+      const nameBox = el('div', { class: 'fes-name' }, [input, ok]);
+      card.appendChild(nameBox);
+      const submit = () => {
+        const name = (input.value || '').trim() || 'ななし';
+        LS.set('fes:lastName', name);
+        const top = FES.saveScore(name, score);
+        const mine = top.find(e => e.name === name && e.score === score);
+        nameBox.remove();
+        renderRank(mine ? mine.date : null);
+        FES.sfx('coin');
+      };
+      ok.addEventListener('click', submit);
+      input.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') submit(); });
+      input.addEventListener('keyup', e => e.stopPropagation());
+      setTimeout(() => { input.focus(); input.select(); }, 350);
+    } else {
+      renderRank(null);
+    }
+    card.appendChild(actions);
+    overlay = el('div', { id: 'fes-overlay' }, [card]);
+    ui.appendChild(overlay);
+    // キー操作: Enter/Space でリトライ（名前入力中は除く）
+    const key = e => {
+      if (!overlay) { document.removeEventListener('keydown', key); return; }
+      if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); retryBtn.click(); }
+    };
+    setTimeout(() => document.addEventListener('keydown', key), 400);
+    return overlay;
+  };
+
+  /* ------------------------------------------------------------ 便利関数 */
+  FES.clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+  FES.lerp = (a, b, t) => a + (b - a) * t;
+  FES.rand = (a, b) => a + Math.random() * (b - a);
+  FES.randInt = (a, b) => Math.floor(a + Math.random() * (b - a + 1));
+  FES.pick = arr => arr[Math.floor(Math.random() * arr.length)];
+  FES.pad = (n, w) => String(n).padStart(w || 2, '0');
+
+  /**
+   * キャンバスを画面に合わせる。 FES.fitCanvas(canvas, 960, 540) → 内部解像度固定・CSSで拡縮。
+   * 戻り値: { scale, offsetX, offsetY, toGame(clientX, clientY) }
+   */
+  FES.fitCanvas = function (canvas, W, H, opts) {
+    opts = opts || {};
+    const st = { scale: 1, offsetX: 0, offsetY: 0 };
+    const dpr = Math.min(global.devicePixelRatio || 1, opts.maxDpr || 2);
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    const ctx = canvas.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    canvas.style.position = 'absolute';
+    function resize() {
+      const vw = global.innerWidth, vh = global.innerHeight;
+      const s = Math.min(vw / W, vh / H);
+      st.scale = s; st.offsetX = (vw - W * s) / 2; st.offsetY = (vh - H * s) / 2;
+      canvas.style.width = (W * s) + 'px'; canvas.style.height = (H * s) + 'px';
+      canvas.style.left = st.offsetX + 'px'; canvas.style.top = st.offsetY + 'px';
+    }
+    st.toGame = (cx, cy) => ({ x: (cx - st.offsetX) / st.scale, y: (cy - st.offsetY) / st.scale });
+    st.resize = resize;
+    global.addEventListener('resize', resize);
+    resize();
+    return st;
+  };
+
+  global.FES = FES;
+})(window);

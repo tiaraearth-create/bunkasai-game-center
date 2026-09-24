@@ -1,0 +1,1090 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>ネオンエアホッケー</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #07071a; overflow: hidden;
+    font-family: "Noto Sans JP","Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif; }
+  #game { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; cursor: crosshair; }
+</style>
+<script src="../common.js"></script>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+'use strict';
+FES.init({ id: 'hockey', title: 'ネオンエアホッケー', ranking: false });
+
+/* =====================================================================
+   定数
+   ===================================================================== */
+const W = 960, H = 540;
+const TX = 40, TY = 64, TW = 880, TH = 440;          // テーブル矩形
+const TR = TX + TW, TB = TY + TH;                     // 右端・下端
+const CX = W / 2, CY = TY + TH / 2;                   // テーブル中心
+const GOAL_H = 180, GT = CY - GOAL_H / 2, GB = CY + GOAL_H / 2;
+const PUCK_R = 15, MALLET_R = 34;
+const PUCK_MAX = 1500, FIRE_SPEED = 1000, WALL_E = 0.92, MALLET_E = 0.9;
+const WIN_SCORE = 7, MATCH_TIME = 90, SUDDEN_TIME = 30;
+const KEY_SPEED = 720, POINTER_SPEED = 3400, MALLET_VMAX = 1900;
+const TAU = Math.PI * 2;
+const FONT = '"Noto Sans JP","Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif';
+
+const P1C = [0, 229, 255], P2C = [255, 63, 164], FIREC = [255, 138, 61], WHITE = [255, 255, 255];
+const GOLD = [255, 211, 110], GREEN = [80, 255, 160], PURPLE = [190, 120, 255];
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+const clamp = FES.clamp, lerp = FES.lerp, rand = FES.rand;
+
+const CPU_LEVELS = [
+  { name: 'よわい', speed: 300, react: 0.40, err: 70, aggr: 0.35, base: 100 },
+  { name: 'ふつう', speed: 480, react: 0.18, err: 28, aggr: 0.70, base: 250 },
+  { name: 'つよい', speed: 720, react: 0.05, err: 6,  aggr: 1.00, base: 500 },
+];
+const TITLE_BTNS = [
+  { label: '2人対戦', mode: '2p', lvl: 1 },
+  { label: 'CPU よわい', mode: 'cpu', lvl: 0 },
+  { label: 'CPU ふつう', mode: 'cpu', lvl: 1 },
+  { label: 'CPU つよい', mode: 'cpu', lvl: 2 },
+];
+const PTYPES = [
+  { id: 'shrink', label: '小', color: PURPLE, note: '相手のマレットが ちいさく！' },
+  { id: 'big',    label: '大', color: GREEN,  note: 'マレットが おおきく！' },
+  { id: 'boost',  label: '速', color: FIREC,  note: '次のショットが パワーアップ！' },
+];
+const P1KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD']);
+const P2KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+const PREVENT = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD']);
+
+/* =====================================================================
+   キャンバス
+   ===================================================================== */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const view = FES.fitCanvas(canvas, W, H);
+
+/* =====================================================================
+   ゲーム状態
+   ===================================================================== */
+const G = {
+  state: 'title', t: 0, paused: false,
+  mode: '2p', cpuLevel: 1, sel: 2,
+  score: [0, 0], scorePop: [0, 0], goalGlow: [0, 0],
+  time: MATCH_TIME, sudden: false,
+  puck: null, puckHidden: false, mallets: [],
+  particles: [], trail: [], flashes: [], powerups: [], powerTimer: 0,
+  shake: 0, flash: 0, hitstop: 0, msg: null, note: null,
+  cd: 0, cdLast: 0, goalT: 0, serveT: 0, serveSide: 0, timeupT: 0, timeupWinner: -1,
+  lastHitter: -1, stallT: 0, lastTick: -1, lastBounceSfx: 0,
+  stats: { maxSpeed: 0, hits: [0, 0], fire: 0 },
+  titlePucks: [],
+};
+const keys = new Set();
+const activePointers = new Set();
+
+function homePos(idx) { return { x: idx === 0 ? TX + 110 : TR - 110, y: CY }; }
+function makeMallet(idx) {
+  const h = homePos(idx);
+  return {
+    idx, x: h.x, y: h.y, px: h.x, py: h.y, nx: h.x, ny: h.y, vx: 0, vy: 0, kvx: 0, kvy: 0,
+    r: MALLET_R, ctrl: 'key', tx: h.x, ty: h.y, pointerId: null,
+    shrinkT: 0, bigT: 0, boost: false, cpuT: 0, hitFlash: 0,
+    color: idx === 0 ? P1C : P2C,
+  };
+}
+function malletBounds(m) {
+  return m.idx === 0
+    ? { x0: TX + m.r, x1: CX - m.r, y0: TY + m.r, y1: TB - m.r }
+    : { x0: CX + m.r, x1: TR - m.r, y0: TY + m.r, y1: TB - m.r };
+}
+function playerName(idx) { return (G.mode === 'cpu' && idx === 1) ? 'CPU' : 'P' + (idx + 1); }
+function inGame() { return G.state === 'countdown' || G.state === 'play' || G.state === 'goal' || G.state === 'serve' || G.state === 'timeup'; }
+
+/* =====================================================================
+   BGM（WebAudio シーケンサ）
+   ===================================================================== */
+const BGM = {
+  on: false, next: 0, step: 0, noiseBuf: null,
+  bass: [110, 0, 110, 0, 130.81, 0, 110, 98, 110, 0, 110, 0, 146.83, 0, 130.81, 98],
+  lead: [0, 440, 0, 523.25, 0, 440, 659.25, 0, 0, 440, 0, 587.33, 0, 523.25, 440, 0],
+  start() { const ac = FES.audioContext(); if (!ac) return; this.on = true; this.next = ac.currentTime + 0.1; this.step = 0; },
+  stop() { this.on = false; },
+  update() {
+    if (!this.on) return;
+    const ac = FES.audioContext(); if (!ac) return;
+    const spb = 60 / 132 / 2;
+    let guard = 0;
+    if (this.next < ac.currentTime - 0.5) this.next = ac.currentTime + 0.05;
+    while (this.next < ac.currentTime + 0.15 && guard++ < 8) {
+      if (!FES.isMuted()) {
+        const i = this.step % 16;
+        const b = this.bass[i]; if (b) this.note(ac, b, this.next, spb * 0.9, 'sawtooth', 0.06, 500);
+        const l = this.lead[i]; if (l && Math.floor(this.step / 16) % 2 === 1) this.note(ac, l, this.next, spb * 0.5, 'square', 0.022, 2500);
+        if (i % 4 === 0) this.kick(ac, this.next);
+        if (i % 2 === 1) this.hat(ac, this.next);
+      }
+      this.next += spb; this.step++;
+    }
+  },
+  note(ac, f, t, d, type, vol, cutoff) {
+    const o = ac.createOscillator(), g = ac.createGain(), fl = ac.createBiquadFilter();
+    o.type = type; o.frequency.value = f; fl.type = 'lowpass'; fl.frequency.value = cutoff;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    o.connect(fl); fl.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + d + 0.05);
+  },
+  kick(ac, t) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(40, t + 0.12);
+    g.gain.setValueAtTime(0.09, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.15);
+    o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + 0.2);
+  },
+  hat(ac, t) {
+    if (!this.noiseBuf) {
+      this.noiseBuf = ac.createBuffer(1, Math.floor(ac.sampleRate * 0.05), ac.sampleRate);
+      const d = this.noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    const s = ac.createBufferSource(); s.buffer = this.noiseBuf;
+    const f = ac.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 7000;
+    const g = ac.createGain(); g.gain.setValueAtTime(0.025, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
+    s.connect(f); f.connect(g); g.connect(ac.destination); s.start(t);
+  },
+};
+
+/* =====================================================================
+   パーティクル / エフェクト
+   ===================================================================== */
+function spawnParticle(x, y, vx, vy, life, size, color, o) {
+  if (G.particles.length > 700) return;
+  o = o || {};
+  G.particles.push({ x, y, vx, vy, life, max: life, size, color, grav: o.grav || 0, spark: !!o.spark, drag: o.drag || 0 });
+}
+function burst(x, y, n, color, speed, o) {
+  for (let i = 0; i < n; i++) {
+    const a = rand(0, TAU), s = rand(speed * 0.2, speed);
+    spawnParticle(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(0.4, 0.9), rand(2, 5), color, o);
+  }
+}
+function sparks(x, y, nx, ny, n, color, speed) {
+  const base = Math.atan2(ny, nx);
+  for (let i = 0; i < n; i++) {
+    const a = base + rand(-1.3, 1.3), s = rand(speed * 0.3, speed);
+    spawnParticle(x, y, Math.cos(a) * s, Math.sin(a) * s, rand(0.15, 0.4), rand(1.5, 3), color, { spark: true, drag: 4 });
+  }
+}
+function updateParticles(dt) {
+  const ps = G.particles;
+  for (let i = ps.length - 1; i >= 0; i--) {
+    const p = ps[i];
+    p.life -= dt;
+    if (p.life <= 0) { ps.splice(i, 1); continue; }
+    if (p.drag) { const f = Math.exp(-p.drag * dt); p.vx *= f; p.vy *= f; }
+    p.vy += p.grav * dt;
+    p.x += p.vx * dt; p.y += p.vy * dt;
+  }
+  for (let i = G.flashes.length - 1; i >= 0; i--) { const f = G.flashes[i]; f.t -= dt * 3.5; if (f.t <= 0) G.flashes.splice(i, 1); }
+  G.shake *= Math.exp(-7 * dt); if (G.shake < 0.2) G.shake = 0;
+  G.flash = Math.max(0, G.flash - dt * 2.2);
+  for (let i = 0; i < 2; i++) { G.scorePop[i] = Math.max(0, G.scorePop[i] - dt * 2); G.goalGlow[i] = Math.max(0, G.goalGlow[i] - dt * 0.7); }
+  for (const m of G.mallets) m.hitFlash = Math.max(0, m.hitFlash - dt * 4);
+  if (G.msg) { G.msg.t += dt; if (G.msg.t >= G.msg.dur) G.msg = null; }
+  if (G.note) { G.note.t += dt; if (G.note.t >= G.note.dur) G.note = null; }
+}
+function wallHit(x, y, orient) {
+  const p = G.puck;
+  const sp = Math.hypot(p.vx, p.vy);
+  G.flashes.push({ x, y, orient, t: 1, str: clamp(sp / 900, 0.35, 1.2) });
+  if (sp > 80 && G.t - G.lastBounceSfx > 0.04) { G.lastBounceSfx = G.t; FES.sfx('bounce'); }
+  const nx = orient === 'h' ? 0 : (x < CX ? 1 : -1), ny = orient === 'h' ? (y < CY ? 1 : -1) : 0;
+  sparks(x, y, nx, ny, Math.min(10, 2 + sp / 150), p.fire ? FIREC : WHITE, 250 + sp * 0.3);
+  if (p.fire) G.shake = Math.max(G.shake, 4);
+}
+
+/* =====================================================================
+   試合の開始・進行
+   ===================================================================== */
+function startMatch(mode, lvl) {
+  FES.hideResult();
+  G.mode = mode; G.cpuLevel = lvl;
+  G.score = [0, 0]; G.scorePop = [0, 0]; G.goalGlow = [0, 0];
+  G.time = MATCH_TIME; G.sudden = false; G.paused = false;
+  G.particles = []; G.trail = []; G.flashes = []; G.powerups = []; G.powerTimer = 7;
+  G.shake = 0; G.flash = 0; G.hitstop = 0; G.msg = null; G.note = null;
+  G.lastHitter = -1; G.stallT = 0; G.lastTick = -1; G.lastBounceSfx = 0;
+  G.stats = { maxSpeed: 0, hits: [0, 0], fire: 0 };
+  G.mallets = [makeMallet(0), makeMallet(1)];
+  if (mode === 'cpu') G.mallets[1].ctrl = 'cpu';
+  G.puck = { x: CX, y: CY, vx: 0, vy: 0, r: PUCK_R, fire: false };
+  G.puckHidden = false;
+  G.state = 'countdown'; G.cd = 3.0; G.cdLast = 4;
+  FES.sfx('start');
+  BGM.start();
+}
+function startFromTitle() {
+  const b = TITLE_BTNS[G.sel];
+  startMatch(b.mode, b.lvl);
+}
+function resetForServe(loser) {
+  const p = G.puck;
+  p.x = loser === 0 ? CX - 160 : CX + 160; p.y = CY; p.vx = 0; p.vy = 0; p.fire = false;
+  G.trail = []; G.puckHidden = false; G.stallT = 0; G.lastHitter = -1;
+  for (const m of G.mallets) {
+    if (m.ctrl === 'pointer') continue;               // 指/マウスの位置に追従させる
+    const h = homePos(m.idx);
+    m.x = m.px = m.nx = m.tx = h.x; m.y = m.py = m.ny = m.ty = h.y; m.kvx = m.kvy = 0; m.vx = m.vy = 0;
+  }
+}
+function beginServe() {
+  resetForServe(G.serveSide);
+  G.state = 'serve'; G.serveT = 1.1;
+  G.msg = { text: playerName(G.serveSide) + ' サーブ', t: 0, dur: 1.1, size: 46, color: G.serveSide === 0 ? P1C : P2C, kind: 'plain' };
+  FES.sfx('select');
+}
+function scoreGoal(scorer) {
+  const p = G.puck;
+  G.score[scorer]++; G.scorePop[scorer] = 1;
+  G.goalGlow[1 - scorer] = 1;
+  G.state = 'goal'; G.goalT = 1.9; G.serveSide = 1 - scorer;
+  G.shake = 24; G.flash = 0.75; G.hitstop = 0;
+  const gx = scorer === 1 ? TX : TR;
+  const col = scorer === 0 ? P1C : P2C;
+  burst(gx, p.y, 70, col, 950, { drag: 1.5 });
+  burst(gx, p.y, 40, WHITE, 600, { drag: 1.5, grav: 300 });
+  burst(gx, p.y, 40, GOLD, 800, { spark: true, drag: 2 });
+  G.msg = { text: 'GOAL!', t: 0, dur: 1.9, size: 150, color: col, kind: 'goal', sub: playerName(scorer) + ' が とくてん！' };
+  G.note = null;
+  FES.sfx('fanfare'); FES.sfx('explode');
+  p.vx = 0; p.vy = 0; p.fire = false; G.puckHidden = true;
+}
+function finishMatch(winner) {
+  BGM.stop();
+  G.state = 'result'; G.paused = false;
+  const a = G.score[0], b = G.score[1];
+  const sub = a + ' - ' + b;
+  const stats = [
+    { label: '最高速', value: Math.round(G.stats.maxSpeed / 10) + ' km/h' },
+    { label: playerName(0) + ' ヒット', value: G.stats.hits[0] },
+    { label: playerName(1) + ' ヒット', value: G.stats.hits[1] },
+    { label: 'FIRE SHOT', value: G.stats.fire },
+  ];
+  const retry = () => startMatch(G.mode, G.cpuLevel);
+  if (winner < 0) {
+    FES.showResult({ title: 'ひきわけ！', score: a, subtitle: sub, stats, ranking: false }, retry);
+  } else if (G.mode === 'cpu') {
+    const lv = CPU_LEVELS[G.cpuLevel];
+    if (winner === 0) {
+      const rs = (a - b) * lv.base + Math.round(G.time) * (G.cpuLevel + 1) * 4;
+      FES.showResult({ title: 'あなたの勝ち！', score: rs, scoreLabel: 'pt', subtitle: sub + '　vs CPU ' + lv.name, stats, ranking: true }, retry);
+    } else {
+      FES.showResult({ title: 'CPU の勝ち…', score: b, subtitle: sub + '　vs CPU ' + lv.name, stats, ranking: false }, retry);
+    }
+  } else {
+    FES.showResult({ title: 'P' + (winner + 1) + ' の勝ち！', score: G.score[winner], subtitle: sub, stats, ranking: false }, retry);
+  }
+}
+function onTimeUp() {
+  if (G.score[0] !== G.score[1]) {
+    G.state = 'timeup'; G.timeupT = 1.7; G.timeupWinner = G.score[0] > G.score[1] ? 0 : 1;
+    G.msg = { text: 'TIME UP!', t: 0, dur: 1.7, size: 110, color: GOLD, kind: 'goal', sub: playerName(G.timeupWinner) + ' の勝ち！' };
+    G.shake = 10; G.flash = 0.4; FES.sfx('perfect');
+  } else if (!G.sudden) {
+    G.sudden = true; G.time = SUDDEN_TIME;
+    G.msg = { text: 'SUDDEN DEATH!', t: 0, dur: 2.0, size: 84, color: [255, 80, 80], kind: 'goal', sub: '次のゴールで 勝ち！' };
+    G.shake = 8; FES.sfx('wrong');
+  } else {
+    G.state = 'timeup'; G.timeupT = 1.5; G.timeupWinner = -1;
+    G.msg = { text: 'DRAW', t: 0, dur: 1.5, size: 110, color: WHITE, kind: 'goal', sub: 'ひきわけ！' };
+    FES.sfx('miss');
+  }
+}
+function togglePause() {
+  if (!inGame()) return;
+  G.paused = !G.paused;
+  if (G.paused) BGM.stop(); else BGM.start();
+  FES.sfx('select');
+}
+
+/* =====================================================================
+   更新
+   ===================================================================== */
+function update(dt) {
+  G.t += dt;
+  if (G.state === 'title') { updateTitle(dt); return; }
+  if (G.paused) return;
+  updateParticles(dt);
+  if (G.state === 'result') return;
+  BGM.update();
+  if (G.hitstop > 0) { G.hitstop -= dt; return; }
+
+  switch (G.state) {
+    case 'countdown': {
+      updateMallets(dt); commitMallets();
+      G.cd -= dt;
+      const n = Math.ceil(G.cd);
+      if (n > 0 && n !== G.cdLast) { G.cdLast = n; FES.sfx('countdown'); }
+      if (G.cd <= 0) {
+        G.state = 'play'; FES.sfx('go');
+        G.msg = { text: 'GO!', t: 0, dur: 0.7, size: 120, color: GOLD, kind: 'goal' };
+        const p = G.puck; const a = rand(-0.5, 0.5) + (Math.random() < 0.5 ? 0 : Math.PI);
+        p.vx = Math.cos(a) * 260; p.vy = Math.sin(a) * 260;
+      }
+      break;
+    }
+    case 'serve':
+      updateMallets(dt); commitMallets();
+      G.serveT -= dt;
+      if (G.serveT <= 0) G.state = 'play';
+      break;
+    case 'play':
+      updatePlay(dt);
+      break;
+    case 'goal':
+      updateMallets(dt); commitMallets();
+      G.goalT -= dt;
+      if (G.goalT <= 0) {
+        const scorer = 1 - G.serveSide;
+        if (G.score[scorer] >= WIN_SCORE || G.sudden) finishMatch(scorer);
+        else beginServe();
+      }
+      break;
+    case 'timeup':
+      G.timeupT -= dt;
+      if (G.timeupT <= 0) finishMatch(G.timeupWinner);
+      break;
+  }
+}
+
+function updatePlay(dt) {
+  updateMallets(dt);
+  stepPhysics(dt);
+  if (G.state !== 'play') return;      // ゴールした
+  updatePowerups(dt);
+  // タイマー
+  G.time -= dt;
+  const secs = Math.ceil(G.time);
+  if (secs <= 10 && secs > 0 && secs !== G.lastTick) { G.lastTick = secs; FES.sfx('tick'); }
+  if (G.time <= 0) { G.time = 0; onTimeUp(); return; }
+  // 停滞したら中央へ小突く
+  const p = G.puck;
+  const sp = Math.hypot(p.vx, p.vy);
+  G.stallT = sp < 40 ? G.stallT + dt : 0;
+  if (G.stallT > 3) {
+    G.stallT = 0;
+    const a = Math.atan2(CY - p.y, CX - p.x) + rand(-0.6, 0.6);
+    p.vx = Math.cos(a) * 320; p.vy = Math.sin(a) * 320;
+    burst(p.x, p.y, 12, WHITE, 200); FES.sfx('jump');
+  }
+}
+
+/* ---------- マレット ---------- */
+function keyDir(idx) {
+  let x = 0, y = 0;
+  if (idx === 0) { if (keys.has('KeyA')) x -= 1; if (keys.has('KeyD')) x += 1; if (keys.has('KeyW')) y -= 1; if (keys.has('KeyS')) y += 1; }
+  else { if (keys.has('ArrowLeft')) x -= 1; if (keys.has('ArrowRight')) x += 1; if (keys.has('ArrowUp')) y -= 1; if (keys.has('ArrowDown')) y += 1; }
+  if (x && y) { x *= 0.7071; y *= 0.7071; }
+  return { x, y };
+}
+function updateMallets(dt) {
+  for (const m of G.mallets) {
+    m.px = m.x; m.py = m.y;
+    m.shrinkT = Math.max(0, m.shrinkT - dt); m.bigT = Math.max(0, m.bigT - dt);
+    const rt = MALLET_R * (m.bigT > 0 ? 1.4 : 1) * (m.shrinkT > 0 ? 0.55 : 1);
+    m.r += (rt - m.r) * Math.min(1, dt * 10);
+    let nx = m.x, ny = m.y;
+    if (m.ctrl === 'cpu') {
+      cpuThink(m, dt);
+      const spd = CPU_LEVELS[G.cpuLevel].speed;
+      const dx = m.tx - m.x, dy = m.ty - m.y, d = Math.hypot(dx, dy);
+      let tvx = 0, tvy = 0;
+      if (d > 1) { const v = Math.min(spd, d / dt); tvx = dx / d * v; tvy = dy / d * v; }
+      const k = 1 - Math.exp(-14 * dt);
+      m.kvx += (tvx - m.kvx) * k; m.kvy += (tvy - m.kvy) * k;
+      nx = m.x + m.kvx * dt; ny = m.y + m.kvy * dt;
+    } else if (m.ctrl === 'key') {
+      const d = keyDir(m.idx);
+      const k = 1 - Math.exp(-24 * dt);
+      m.kvx += (d.x * KEY_SPEED - m.kvx) * k; m.kvy += (d.y * KEY_SPEED - m.kvy) * k;
+      nx = m.x + m.kvx * dt; ny = m.y + m.kvy * dt;
+    } else {
+      const dx = m.tx - m.x, dy = m.ty - m.y, d = Math.hypot(dx, dy), step = POINTER_SPEED * dt;
+      if (d <= step) { nx = m.tx; ny = m.ty; } else { nx = m.x + dx / d * step; ny = m.y + dy / d * step; }
+    }
+    const b = malletBounds(m);
+    nx = clamp(nx, b.x0, b.x1); ny = clamp(ny, b.y0, b.y1);
+    m.nx = nx; m.ny = ny;
+    let vx = (nx - m.x) / dt, vy = (ny - m.y) / dt;
+    const sp = Math.hypot(vx, vy);
+    if (sp > MALLET_VMAX) { vx *= MALLET_VMAX / sp; vy *= MALLET_VMAX / sp; }
+    m.vx = vx; m.vy = vy;
+  }
+}
+function commitMallets() { for (const m of G.mallets) { m.x = m.nx; m.y = m.ny; } }
+
+/* ---------- CPU ---------- */
+function predictY(p, x) {
+  const t = (x - p.x) / p.vx;
+  if (!(t > 0)) return p.y;
+  const lo = TY + p.r, hi = TB - p.r, span = hi - lo;
+  let y = p.y + p.vy * t - lo;
+  y = ((y % (2 * span)) + 2 * span) % (2 * span);
+  if (y > span) y = 2 * span - y;
+  return y + lo;
+}
+function cpuThink(m, dt) {
+  const lv = CPU_LEVELS[G.cpuLevel], p = G.puck;
+  m.cpuT -= dt;
+  if (m.cpuT > 0) return;
+  m.cpuT = lv.react;
+  const b = malletBounds(m);
+  const homeX = TR - 80;
+  let tx, ty;
+  const attack = G.state === 'play' && p.x > CX + 10 && p.vx > -260;
+  if (attack) {
+    // 相手ゴールの狙い点 → パックの「後ろ」に回り込んでから押し込む
+    const gy = CY + (Math.random() - 0.5) * 130 * (1.3 - lv.aggr);
+    let dx = p.x - TX, dy = p.y - gy; const d = Math.hypot(dx, dy) || 1; dx /= d; dy /= d;
+    const off = (m.r + p.r) * 0.9;
+    const bx = p.x + dx * off, by = p.y + dy * off;
+    const distBehind = Math.hypot(m.x - bx, m.y - by);
+    if (p.x > m.x + 6) {
+      // パックが自分より後ろ: 横に避けつつ回り込む
+      tx = bx + 30; ty = p.y + (m.y >= p.y ? 1 : -1) * (m.r + p.r + 24);
+    } else if (distBehind > 26 + (1 - lv.aggr) * 50) {
+      tx = bx; ty = by;
+    } else {
+      tx = p.x - dx * 50 + p.vx * 0.05; ty = p.y - dy * 50 + p.vy * 0.05;
+    }
+  } else {
+    let py = p.y;
+    if (p.vx > 60) py = predictY(p, homeX);
+    else py = lerp(CY, p.y, 0.6);
+    tx = homeX; ty = py;
+  }
+  tx += (Math.random() - 0.5) * 2 * lv.err; ty += (Math.random() - 0.5) * 2 * lv.err;
+  m.tx = clamp(tx, b.x0, b.x1); m.ty = clamp(ty, b.y0, b.y1);
+}
+
+/* ---------- 物理 ---------- */
+function clampPuckSpeed(p) {
+  const sp = Math.hypot(p.vx, p.vy);
+  if (sp > PUCK_MAX) { p.vx *= PUCK_MAX / sp; p.vy *= PUCK_MAX / sp; }
+}
+function stepPhysics(dt) {
+  const p = G.puck;
+  let maxV = Math.hypot(p.vx, p.vy);
+  for (const m of G.mallets) maxV = Math.max(maxV, Math.hypot(m.nx - m.px, m.ny - m.py) / dt);
+  const n = clamp(Math.ceil(maxV * dt / (PUCK_R * 0.5)), 1, 24);
+  const h = dt / n;
+  let goal = false;
+  for (let i = 1; i <= n && !goal; i++) {
+    const s = i / n;
+    p.x += p.vx * h; p.y += p.vy * h;
+    for (const m of G.mallets) {
+      const mx = m.px + (m.nx - m.px) * s, my = m.py + (m.ny - m.py) * s;
+      collidePuckMallet(p, m, mx, my);
+    }
+    goal = collideWalls(p);
+  }
+  commitMallets();
+  if (goal) return;
+  const f = Math.exp(-0.18 * dt); p.vx *= f; p.vy *= f;
+  const sp = Math.hypot(p.vx, p.vy);
+  if (p.fire && sp < 650) p.fire = false;
+  if (sp > G.stats.maxSpeed) G.stats.maxSpeed = sp;
+  G.trail.push({ x: p.x, y: p.y, fire: p.fire });
+  if (G.trail.length > 18) G.trail.shift();
+  if (p.fire) {
+    const ux = p.vx / sp, uy = p.vy / sp;
+    for (let i = 0; i < 3; i++) {
+      const col = Math.random() < 0.5 ? FIREC : GOLD;
+      spawnParticle(p.x - ux * p.r + rand(-6, 6), p.y - uy * p.r + rand(-6, 6), -ux * sp * 0.12 + rand(-60, 60), -uy * sp * 0.12 + rand(-60, 60), rand(0.2, 0.4), rand(4, 8), col, { drag: 3 });
+    }
+  }
+}
+function collidePuckMallet(p, m, mx, my) {
+  const dx = p.x - mx, dy = p.y - my, rr = p.r + m.r, d2 = dx * dx + dy * dy;
+  if (d2 >= rr * rr) return;
+  const d = Math.sqrt(d2) || 0.001;
+  const nx = dx / d, ny = dy / d;
+  let px = mx + nx * (rr + 0.5), py = my + ny * (rr + 0.5);
+  // 壁とマレットに挟まれたら接線方向へ逃がす
+  if (py < TY + p.r || py > TB - p.r) {
+    py = clamp(py, TY + p.r, TB - p.r);
+    const ddy = py - my, ddx = Math.sqrt(Math.max(0, rr * rr - ddy * ddy)) + 0.5;
+    px = mx + (p.x >= mx ? ddx : -ddx);
+  }
+  const inGoalBand = p.y > GT && p.y < GB;
+  if (!inGoalBand && (px < TX + p.r || px > TR - p.r)) {
+    px = clamp(px, TX + p.r, TR - p.r);
+    const ddx = px - mx, ddy = Math.sqrt(Math.max(0, rr * rr - ddx * ddx)) + 0.5;
+    py = my + (p.y >= my ? ddy : -ddy);
+  }
+  p.x = px; p.y = py;
+  const rvx = p.vx - m.vx, rvy = p.vy - m.vy;
+  const vn = rvx * nx + rvy * ny;
+  if (vn >= 0) return;
+  p.vx -= (1 + MALLET_E) * vn * nx; p.vy -= (1 + MALLET_E) * vn * ny;
+  const mvn = m.vx * nx + m.vy * ny;
+  if (mvn > 0) { p.vx += mvn * 0.3 * nx; p.vy += mvn * 0.3 * ny; }
+  clampPuckSpeed(p);
+  onMalletHit(m, p, nx, ny, -vn);
+}
+function onMalletHit(m, p, nx, ny, impact) {
+  G.lastHitter = m.idx; G.stats.hits[m.idx]++; m.hitFlash = 1;
+  let sp = Math.hypot(p.vx, p.vy);
+  if (m.boost) {
+    m.boost = false;
+    const k = Math.max(1.5, (FIRE_SPEED + 250) / Math.max(sp, 1));
+    p.vx *= k; p.vy *= k; clampPuckSpeed(p);
+    sp = Math.hypot(p.vx, p.vy);
+    burst(p.x, p.y, 30, FIREC, 500, { drag: 2 });
+  }
+  const hx = p.x - nx * p.r, hy = p.y - ny * p.r;
+  sparks(hx, hy, nx, ny, Math.min(18, 5 + impact / 60), m.color, 200 + impact * 0.4);
+  if (sp >= FIRE_SPEED) {
+    if (!p.fire) {
+      p.fire = true; G.stats.fire++;
+      G.note = { text: 'FIRE SHOT!', t: 0, dur: 1.0, color: FIREC };
+      FES.sfx('combo');
+      FES.noise({ dur: 0.25, freq: 2500, slide: 300, vol: 0.25, filter: 'bandpass' });
+      burst(hx, hy, 16, FIREC, 400, { drag: 2 });
+    }
+    G.shake = Math.max(G.shake, 9); G.hitstop = 0.045; G.flash = Math.max(G.flash, 0.15);
+  } else {
+    G.shake = Math.max(G.shake, Math.min(6, impact / 180));
+    if (impact > 700) G.hitstop = 0.02;
+  }
+  FES.tone({ freq: 380 + Math.min(700, impact * 0.6), slide: 220, dur: 0.07, type: 'triangle', vol: 0.3 });
+  if (impact > 500) FES.noise({ dur: 0.08, freq: 1800, slide: 200, vol: 0.18 });
+}
+function collideWalls(p) {
+  if (p.y - p.r < TY) { p.y = TY + p.r; if (p.vy < 0) { p.vy = -p.vy * WALL_E; wallHit(p.x, TY, 'h'); } }
+  else if (p.y + p.r > TB) { p.y = TB - p.r; if (p.vy > 0) { p.vy = -p.vy * WALL_E; wallHit(p.x, TB, 'h'); } }
+  if (p.x - p.r < TX) {
+    if (p.y - p.r > GT && p.y + p.r < GB) { if (p.x + p.r < TX) { scoreGoal(1); return true; } }
+    else { p.x = TX + p.r; if (p.vx < 0) { p.vx = -p.vx * WALL_E; wallHit(TX, p.y, 'v'); } }
+  } else if (p.x + p.r > TR) {
+    if (p.y - p.r > GT && p.y + p.r < GB) { if (p.x - p.r > TR) { scoreGoal(0); return true; } }
+    else { p.x = TR - p.r; if (p.vx > 0) { p.vx = -p.vx * WALL_E; wallHit(TR, p.y, 'v'); } }
+  }
+  return false;
+}
+
+/* ---------- パワーアップ ---------- */
+function updatePowerups(dt) {
+  G.powerTimer -= dt;
+  if (G.powerTimer <= 0 && G.powerups.length === 0) {
+    const type = FES.pick(PTYPES);
+    const side = Math.random() < 0.5 ? -1 : 1;
+    G.powerups.push({ type, x: CX + side * rand(120, 300), y: rand(TY + 70, TB - 70), r: 22, t: 0, life: 11 });
+    G.powerTimer = rand(10, 16);
+    FES.sfx('coin');
+  }
+  const p = G.puck;
+  for (let i = G.powerups.length - 1; i >= 0; i--) {
+    const u = G.powerups[i];
+    u.t += dt; u.life -= dt;
+    if (u.life <= 0) { G.powerups.splice(i, 1); continue; }
+    if (Math.hypot(p.x - u.x, p.y - u.y) < u.r + p.r) {
+      G.powerups.splice(i, 1);
+      burst(u.x, u.y, 28, u.type.color, 420, { drag: 2 });
+      if (G.lastHitter >= 0) applyPower(u.type, G.lastHitter); else FES.sfx('bounce');
+    }
+  }
+}
+function applyPower(type, idx) {
+  const me = G.mallets[idx], op = G.mallets[1 - idx];
+  if (type.id === 'shrink') op.shrinkT = 7;
+  else if (type.id === 'big') me.bigT = 7;
+  else me.boost = true;
+  G.note = { text: playerName(idx) + ': ' + type.note, t: 0, dur: 1.6, color: type.color };
+  FES.sfx('powerup');
+}
+
+/* ---------- タイトル ---------- */
+function updateTitle(dt) {
+  if (!G.titlePucks.length) {
+    for (let i = 0; i < 6; i++) {
+      const a = rand(0, TAU);
+      G.titlePucks.push({ x: rand(100, W - 100), y: rand(100, H - 100), vx: Math.cos(a) * rand(120, 260), vy: Math.sin(a) * rand(120, 260), r: rand(8, 16), c: FES.pick([P1C, P2C, WHITE, GOLD]), trail: [] });
+    }
+  }
+  for (const p of G.titlePucks) {
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    if (p.x < p.r) { p.x = p.r; p.vx = Math.abs(p.vx); } if (p.x > W - p.r) { p.x = W - p.r; p.vx = -Math.abs(p.vx); }
+    if (p.y < p.r) { p.y = p.r; p.vy = Math.abs(p.vy); } if (p.y > H - p.r) { p.y = H - p.r; p.vy = -Math.abs(p.vy); }
+    p.trail.push({ x: p.x, y: p.y }); if (p.trail.length > 12) p.trail.shift();
+  }
+}
+function titleBtnRect(i) {
+  const bw = 200, bh = 62, gap = 14;
+  const x0 = (W - (bw * 4 + gap * 3)) / 2;
+  return { x: x0 + i * (bw + gap), y: 300, w: bw, h: bh };
+}
+function titleBtnAt(x, y) {
+  for (let i = 0; i < TITLE_BTNS.length; i++) {
+    const r = titleBtnRect(i);
+    if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return i;
+  }
+  return -1;
+}
+function pauseBtnRect() { return { x: CX + 82, y: 11, w: 40, h: 40 }; }
+function hitPauseBtn(x, y) { const r = pauseBtnRect(); return x >= r.x - 6 && x <= r.x + r.w + 6 && y >= r.y - 6 && y <= r.y + r.h + 6; }
+
+/* =====================================================================
+   入力
+   ===================================================================== */
+function toGame(e) { return view.toGame(e.clientX, e.clientY); }
+function setPointerTarget(m, p) { const b = malletBounds(m); m.tx = clamp(p.x, b.x0, b.x1); m.ty = clamp(p.y, b.y0, b.y1); }
+function assignTouch(id, p) {
+  let idx = 0;
+  if (G.mode === '2p') idx = p.x < CX ? 0 : 1;
+  const m = G.mallets[idx];
+  if (m.ctrl === 'cpu') return;
+  if (m.pointerId !== null && activePointers.has(m.pointerId)) return;
+  m.pointerId = id; m.ctrl = 'pointer'; setPointerTarget(m, p);
+}
+
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  activePointers.add(e.pointerId);
+  const p = toGame(e);
+  if (G.state === 'title') {
+    const i = titleBtnAt(p.x, p.y);
+    if (i >= 0) { G.sel = i; startFromTitle(); }
+    return;
+  }
+  if (!inGame()) return;
+  if (G.paused) { togglePause(); return; }
+  if (hitPauseBtn(p.x, p.y)) { togglePause(); return; }
+  if (e.pointerType === 'touch') assignTouch(e.pointerId, p);
+  else { const m = G.mallets[0]; m.ctrl = 'pointer'; setPointerTarget(m, p); }
+});
+window.addEventListener('pointermove', e => {
+  const p = toGame(e);
+  if (G.state === 'title') {
+    const i = titleBtnAt(p.x, p.y);
+    if (i >= 0 && i !== G.sel) { G.sel = i; FES.sfx('tick'); }
+    return;
+  }
+  if (!inGame() || G.paused) return;
+  if (e.pointerType === 'touch') {
+    const m = G.mallets.find(mm => mm.pointerId === e.pointerId);
+    if (m) setPointerTarget(m, p);
+  } else {
+    const m = G.mallets[0];
+    m.ctrl = 'pointer'; setPointerTarget(m, p);
+  }
+});
+const releasePointer = e => {
+  activePointers.delete(e.pointerId);
+  for (const m of G.mallets) if (m.pointerId === e.pointerId) m.pointerId = null;
+};
+window.addEventListener('pointerup', releasePointer);
+window.addEventListener('pointercancel', releasePointer);
+
+window.addEventListener('keydown', e => {
+  if (PREVENT.has(e.code)) e.preventDefault();
+  if (e.repeat) return;
+  keys.add(e.code);
+  if (e.code === 'Escape' || e.code === 'KeyP') { togglePause(); return; }
+  if (G.state === 'title') {
+    if (e.code === 'ArrowLeft' || e.code === 'KeyA') { G.sel = (G.sel + 3) % 4; FES.sfx('tick'); }
+    else if (e.code === 'ArrowRight' || e.code === 'KeyD') { G.sel = (G.sel + 1) % 4; FES.sfx('tick'); }
+    else if (e.code === 'Enter' || e.code === 'Space') startFromTitle();
+    return;
+  }
+  if (inGame() && !G.paused) {
+    if (P1KEYS.has(e.code)) G.mallets[0].ctrl = 'key';
+    if (P2KEYS.has(e.code) && G.mallets[1].ctrl !== 'cpu') G.mallets[1].ctrl = 'key';
+  }
+});
+window.addEventListener('keyup', e => keys.delete(e.code));
+window.addEventListener('blur', () => keys.clear());
+document.addEventListener('visibilitychange', () => { if (document.hidden && inGame() && !G.paused) togglePause(); });
+
+/* =====================================================================
+   描画ヘルパー
+   ===================================================================== */
+function text(s, x, y, size, color, align, weight, base) {
+  ctx.font = (weight || 'bold') + ' ' + size + 'px ' + FONT;
+  ctx.fillStyle = color; ctx.textAlign = align || 'center'; ctx.textBaseline = base || 'middle';
+  ctx.fillText(s, x, y);
+}
+function rrect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r); ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h); ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath();
+}
+function glow(x, y, r, color, a) {
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, rgba(color, a)); g.addColorStop(0.5, rgba(color, a * 0.35)); g.addColorStop(1, rgba(color, 0));
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
+}
+function easeOutBack(t) { const c = 1.70158, s = c + 1; return 1 + s * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); }
+function fmtTime(t) { const s = Math.max(0, Math.ceil(t)); return Math.floor(s / 60) + ':' + FES.pad(s % 60); }
+
+/* =====================================================================
+   描画
+   ===================================================================== */
+function draw() {
+  ctx.save();
+  ctx.fillStyle = '#07071a'; ctx.fillRect(0, 0, W, H);
+  if (G.shake > 0) ctx.translate((Math.random() - 0.5) * G.shake, (Math.random() - 0.5) * G.shake);
+  drawBackground();
+  if (G.state === 'title') { drawTitle(); ctx.restore(); return; }
+  drawTable();
+  drawScore();
+  drawPowerups();
+  drawTrail();
+  if (!G.puckHidden) drawPuck();
+  drawMallets();
+  drawParticles();
+  drawWallFlashes();
+  drawFrame();
+  drawHUD();
+  drawMessages();
+  if (G.paused) drawPause();
+  ctx.restore();
+  if (G.flash > 0.01) { ctx.fillStyle = rgba(WHITE, G.flash * 0.8); ctx.fillRect(0, 0, W, H); }
+}
+
+function drawBackground() {
+  const t = G.t;
+  // 動くグリッド
+  ctx.strokeStyle = 'rgba(120,110,255,0.07)'; ctx.lineWidth = 1;
+  const off = (t * 25) % 48;
+  ctx.beginPath();
+  for (let x = -48 + off; x < W + 48; x += 48) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+  for (let y = -48 + off; y < H + 48; y += 48) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
+  ctx.stroke();
+  // 左右のカラーグロー
+  glow(80, CY, 420, P1C, 0.10 + 0.03 * Math.sin(t * 1.3));
+  glow(W - 80, CY, 420, P2C, 0.10 + 0.03 * Math.sin(t * 1.3 + 2));
+}
+
+function drawTable() {
+  const t = G.t;
+  const g = ctx.createLinearGradient(TX, TY, TX, TB);
+  g.addColorStop(0, '#11143f'); g.addColorStop(1, '#0a0b28');
+  ctx.fillStyle = g; ctx.fillRect(TX, TY, TW, TH);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(TX, TY, TW, TH); ctx.clip();
+  // 内側グリッド（流れる）
+  ctx.strokeStyle = 'rgba(255,255,255,0.045)'; ctx.lineWidth = 1;
+  const off = (t * 40) % 40;
+  ctx.beginPath();
+  for (let x = TX - 40 + off; x < TR + 40; x += 40) { ctx.moveTo(x, TY); ctx.lineTo(x, TB); }
+  for (let y = TY; y < TB; y += 40) { ctx.moveTo(TX, y); ctx.lineTo(TR, y); }
+  ctx.stroke();
+  // 陣地のティント
+  const gl = ctx.createLinearGradient(TX, 0, CX, 0); gl.addColorStop(0, rgba(P1C, 0.12)); gl.addColorStop(1, rgba(P1C, 0));
+  ctx.fillStyle = gl; ctx.fillRect(TX, TY, TW / 2, TH);
+  const gr = ctx.createLinearGradient(TR, 0, CX, 0); gr.addColorStop(0, rgba(P2C, 0.12)); gr.addColorStop(1, rgba(P2C, 0));
+  ctx.fillStyle = gr; ctx.fillRect(CX, TY, TW / 2, TH);
+  // ゴールクリース
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = rgba(P1C, 0.35); ctx.beginPath(); ctx.arc(TX, CY, 130, -Math.PI / 2, Math.PI / 2); ctx.stroke();
+  ctx.strokeStyle = rgba(P2C, 0.35); ctx.beginPath(); ctx.arc(TR, CY, 130, Math.PI / 2, Math.PI * 1.5); ctx.stroke();
+  // センターライン・サークル
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 4;
+  ctx.setLineDash([14, 10]); ctx.lineDashOffset = -t * 30;
+  ctx.beginPath(); ctx.moveTo(CX, TY); ctx.lineTo(CX, TB); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(CX, CY, 72, 0, TAU); ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 10;
+  ctx.beginPath(); ctx.arc(CX, CY, 84, 0, TAU); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.4)'; ctx.beginPath(); ctx.arc(CX, CY, 6, 0, TAU); ctx.fill();
+  ctx.restore();
+  // ゴール口
+  for (let i = 0; i < 2; i++) {
+    const col = i === 0 ? P1C : P2C;
+    const gx = i === 0 ? TX : TR;
+    const pulse = 0.45 + 0.2 * Math.sin(t * 4 + i * 2) + G.goalGlow[i] * 0.6;
+    glow(gx, CY, 140 + G.goalGlow[i] * 80, G.goalGlow[i] > 0 ? WHITE : col, Math.min(0.5, pulse * 0.35));
+    ctx.fillStyle = '#04040f';
+    ctx.fillRect(i === 0 ? TX - 18 : TR, GT, 18, GOAL_H);
+    const gg = ctx.createLinearGradient(gx - 18, 0, gx + 18, 0);
+    gg.addColorStop(0, rgba(col, 0)); gg.addColorStop(0.5, rgba(col, pulse)); gg.addColorStop(1, rgba(col, 0));
+    ctx.fillStyle = gg; ctx.fillRect(gx - 18, GT, 36, GOAL_H);
+    ctx.fillStyle = rgba(col, 0.9);
+    ctx.beginPath(); ctx.arc(gx, GT, 7, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(gx, GB, 7, 0, TAU); ctx.fill();
+  }
+}
+
+function drawScore() {
+  for (let i = 0; i < 2; i++) {
+    const x = i === 0 ? CX - 190 : CX + 190;
+    const pop = G.scorePop[i];
+    const s = 1 + easeOutBack(1 - pop) * 0 + pop * 0.45;
+    ctx.save(); ctx.translate(x, CY); ctx.scale(s, s);
+    text(String(G.score[i]), 0, 8, 190, rgba(i === 0 ? P1C : P2C, 0.16 + pop * 0.5), 'center', '900');
+    ctx.restore();
+  }
+}
+
+function drawPowerups() {
+  for (const u of G.powerups) {
+    const blink = u.life < 3 && Math.floor(u.life * 6) % 2 === 0;
+    if (blink) continue;
+    const s = 1 + 0.08 * Math.sin(u.t * 6);
+    glow(u.x, u.y, u.r * 2.6 * s, u.type.color, 0.5);
+    ctx.save(); ctx.translate(u.x, u.y); ctx.rotate(Math.sin(u.t * 3) * 0.12); ctx.scale(s, s);
+    ctx.fillStyle = '#0a0b28'; ctx.beginPath(); ctx.arc(0, 0, u.r, 0, TAU); ctx.fill();
+    ctx.strokeStyle = rgba(u.type.color, 1); ctx.lineWidth = 3; ctx.stroke();
+    text(u.type.label, 0, 2, 26, rgba(u.type.color, 1), 'center', '900');
+    ctx.restore();
+  }
+}
+
+function drawTrail() {
+  const n = G.trail.length;
+  for (let i = 0; i < n; i++) {
+    const tr = G.trail[i], k = (i + 1) / n;
+    const col = tr.fire ? FIREC : WHITE;
+    ctx.fillStyle = rgba(col, k * (tr.fire ? 0.5 : 0.3));
+    ctx.beginPath(); ctx.arc(tr.x, tr.y, PUCK_R * (0.3 + 0.7 * k), 0, TAU); ctx.fill();
+  }
+}
+function drawPuck() {
+  const p = G.puck;
+  if (p.fire) glow(p.x, p.y, 60, FIREC, 0.7 + 0.2 * Math.sin(G.t * 40));
+  else glow(p.x, p.y, 40, WHITE, 0.35);
+  const g = ctx.createRadialGradient(p.x - 4, p.y - 5, 2, p.x, p.y, p.r);
+  g.addColorStop(0, '#ffffff'); g.addColorStop(0.7, p.fire ? '#ffd8a0' : '#d8e8ff'); g.addColorStop(1, p.fire ? '#ff8a3d' : '#7aa8ff');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.fill();
+  ctx.strokeStyle = p.fire ? rgba(FIREC, 1) : 'rgba(255,255,255,0.9)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(p.x, p.y, p.r - 1, 0, TAU); ctx.stroke();
+  ctx.fillStyle = 'rgba(0,20,60,0.35)'; ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 0.45, 0, TAU); ctx.fill();
+}
+function drawMallets() {
+  for (const m of G.mallets) {
+    const c = m.color;
+    glow(m.x, m.y, m.r * 2.2, c, 0.35 + m.hitFlash * 0.4);
+    if (m.hitFlash > 0) {
+      ctx.strokeStyle = rgba(c, m.hitFlash); ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(m.x, m.y, m.r + (1 - m.hitFlash) * 40, 0, TAU); ctx.stroke();
+    }
+    const g = ctx.createRadialGradient(m.x - m.r * 0.3, m.y - m.r * 0.35, 2, m.x, m.y, m.r);
+    g.addColorStop(0, rgba(c, 0.55)); g.addColorStop(0.75, rgba(c, 0.25)); g.addColorStop(1, rgba(c, 0.6));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, TAU); ctx.fill();
+    ctx.strokeStyle = rgba(c, 1); ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r - 2, 0, TAU); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r * 0.45, 0, TAU); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.beginPath(); ctx.arc(m.x, m.y, m.r * 0.18, 0, TAU); ctx.fill();
+    if (m.boost) {
+      ctx.strokeStyle = rgba(FIREC, 0.6 + 0.4 * Math.sin(G.t * 12)); ctx.lineWidth = 3;
+      ctx.setLineDash([8, 6]); ctx.lineDashOffset = -G.t * 60;
+      ctx.beginPath(); ctx.arc(m.x, m.y, m.r + 8, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+}
+function drawParticles() {
+  for (const p of G.particles) {
+    const a = clamp(p.life / p.max, 0, 1);
+    if (p.spark) {
+      ctx.strokeStyle = rgba(p.color, a); ctx.lineWidth = p.size;
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.vx * 0.02, p.y - p.vy * 0.02); ctx.stroke();
+    } else {
+      ctx.fillStyle = rgba(p.color, a);
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (0.4 + 0.6 * a), 0, TAU); ctx.fill();
+    }
+  }
+}
+function drawWallFlashes() {
+  for (const f of G.flashes) {
+    const a = f.t * 0.7 * f.str;
+    glow(f.x, f.y, 90 * f.str, WHITE, a);
+    ctx.strokeStyle = rgba(WHITE, f.t); ctx.lineWidth = 6;
+    const len = 120 * f.t * f.str;
+    ctx.beginPath();
+    if (f.orient === 'h') { ctx.moveTo(f.x - len, f.y); ctx.lineTo(f.x + len, f.y); }
+    else { ctx.moveTo(f.x, f.y - len); ctx.lineTo(f.x, f.y + len); }
+    ctx.stroke();
+  }
+}
+function drawFrame() {
+  const g = ctx.createLinearGradient(TX, 0, TR, 0);
+  g.addColorStop(0, rgba(P1C, 1)); g.addColorStop(0.5, 'rgba(230,220,255,1)'); g.addColorStop(1, rgba(P2C, 1));
+  ctx.strokeStyle = g;
+  const passes = [[18, 0.06], [10, 0.14], [5, 0.4], [2.5, 1]];
+  for (const [w, a] of passes) {
+    ctx.globalAlpha = a; ctx.lineWidth = w;
+    rrect(TX, TY, TW, TH, 14); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawHUD() {
+  // タイマー
+  const urgent = G.sudden || (G.time <= 10 && G.state === 'play');
+  const pulse = urgent ? 0.5 + 0.5 * Math.sin(G.t * 10) : 0;
+  ctx.fillStyle = urgent ? `rgba(120,20,40,${0.7 + pulse * 0.2})` : 'rgba(0,0,0,0.55)';
+  rrect(CX - 66, 10, 132, 42, 14); ctx.fill();
+  ctx.strokeStyle = urgent ? rgba([255, 90, 90], 0.9) : 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1.5; ctx.stroke();
+  text((G.sudden ? 'SD ' : '') + fmtTime(G.time), CX, 32, G.sudden ? 24 : 28, urgent ? '#ffb0b0' : '#fff', 'center', '900');
+  // ポーズボタン
+  const pb = pauseBtnRect();
+  ctx.fillStyle = 'rgba(0,0,0,0.5)'; rrect(pb.x, pb.y, pb.w, pb.h, 12); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.stroke();
+  ctx.fillStyle = '#fff';
+  if (G.paused) { ctx.beginPath(); ctx.moveTo(pb.x + 14, pb.y + 11); ctx.lineTo(pb.x + 30, pb.y + 20); ctx.lineTo(pb.x + 14, pb.y + 29); ctx.closePath(); ctx.fill(); }
+  else { ctx.fillRect(pb.x + 12, pb.y + 11, 6, 18); ctx.fillRect(pb.x + 22, pb.y + 11, 6, 18); }
+  // プレイヤー名 + 効果
+  for (let i = 0; i < 2; i++) {
+    const m = G.mallets[i];
+    const col = i === 0 ? P1C : P2C;
+    let name = playerName(i);
+    if (G.mode === 'cpu') name = i === 0 ? 'あなた' : 'CPU ' + CPU_LEVELS[G.cpuLevel].name;
+    const x = i === 0 ? CX - 100 : CX + 148;
+    const align = i === 0 ? 'right' : 'left';
+    text(name, x, 32, 24, rgba(col, 1), align, '900');
+    // 効果バッジ
+    const badges = [];
+    if (m.bigT > 0) badges.push({ l: '大', c: GREEN, t: m.bigT });
+    if (m.shrinkT > 0) badges.push({ l: '小', c: PURPLE, t: m.shrinkT });
+    if (m.boost) badges.push({ l: '速', c: FIREC, t: 0 });
+    ctx.font = 'bold 24px ' + FONT;
+    const nw = ctx.measureText(name).width;
+    let bx = i === 0 ? x - nw - 14 : x + nw + 14;
+    for (const b of badges) {
+      const cx2 = i === 0 ? bx - 16 : bx + 16;
+      ctx.fillStyle = rgba(b.c, 0.25); ctx.beginPath(); ctx.arc(cx2, 31, 16, 0, TAU); ctx.fill();
+      ctx.strokeStyle = rgba(b.c, 1); ctx.lineWidth = 2; ctx.stroke();
+      if (b.t > 0) { ctx.strokeStyle = rgba(b.c, 0.9); ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(cx2, 31, 16, -Math.PI / 2, -Math.PI / 2 + TAU * (b.t / 7)); ctx.stroke(); }
+      text(b.l, cx2, 32, 16, '#fff', 'center', '900');
+      bx += i === 0 ? -36 : 36;
+    }
+  }
+  // 下部ヒント
+  const hint = G.mode === 'cpu'
+    ? 'あなた: W A S D ／ マウス ／ タッチ　　　Esc / P: ポーズ'
+    : 'P1: W A S D ／ マウス ／ 左タッチ　　P2: ↑ ↓ ← → ／ 右タッチ　　Esc / P: ポーズ';
+  text(hint, CX, 523, 14, 'rgba(255,255,255,0.5)', 'center', '600');
+}
+
+function drawMessages() {
+  // カウントダウン
+  if (G.state === 'countdown') {
+    const n = Math.ceil(G.cd);
+    const frac = G.cd - Math.floor(G.cd);
+    const s = 1 + frac * 0.6;
+    ctx.save(); ctx.translate(CX, CY); ctx.scale(s, s);
+    text(String(n), 0, 0, 140, rgba(GOLD, 0.35 + 0.65 * frac), 'center', '900');
+    ctx.restore();
+    text('READY...', CX, CY - 110, 28, 'rgba(255,255,255,0.8)', 'center', '900');
+  }
+  if (G.msg) {
+    const m = G.msg;
+    const p = m.t / m.dur;
+    const a = p > 0.78 ? 1 - (p - 0.78) / 0.22 : 1;
+    const pop = m.t < 0.32 ? easeOutBack(m.t / 0.32) : 1;
+    ctx.save(); ctx.globalAlpha = clamp(a, 0, 1); ctx.translate(CX, CY - 14); ctx.scale(pop, pop);
+    if (m.kind === 'goal') {
+      ctx.rotate(-0.035);
+      ctx.font = '900 ' + m.size + 'px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineJoin = 'round';
+      ctx.strokeStyle = 'rgba(5,5,25,0.9)'; ctx.lineWidth = 14; ctx.strokeText(m.text, 0, 0);
+      const g = ctx.createLinearGradient(0, -m.size / 2, 0, m.size / 2);
+      g.addColorStop(0, '#ffffff'); g.addColorStop(0.45, rgba(m.color, 1)); g.addColorStop(1, '#ffffff');
+      ctx.fillStyle = g; ctx.fillText(m.text, 0, 0);
+      ctx.strokeStyle = rgba(m.color, 0.6); ctx.lineWidth = 2; ctx.strokeText(m.text, 0, 0);
+      if (m.sub) text(m.sub, 0, m.size * 0.62, 32, '#fff', 'center', '900');
+    } else {
+      ctx.font = '900 ' + m.size + 'px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.strokeStyle = 'rgba(5,5,25,0.9)'; ctx.lineWidth = 8; ctx.lineJoin = 'round'; ctx.strokeText(m.text, 0, 0);
+      ctx.fillStyle = rgba(m.color, 1); ctx.fillText(m.text, 0, 0);
+    }
+    ctx.restore();
+  }
+  if (G.note) {
+    const n = G.note;
+    const p = n.t / n.dur;
+    const a = p > 0.7 ? 1 - (p - 0.7) / 0.3 : 1;
+    const pop = n.t < 0.25 ? easeOutBack(n.t / 0.25) : 1;
+    ctx.save(); ctx.globalAlpha = clamp(a, 0, 1); ctx.translate(CX, 96); ctx.scale(pop, pop);
+    ctx.font = '900 30px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(5,5,25,0.9)'; ctx.lineWidth = 7; ctx.strokeText(n.text, 0, 0);
+    ctx.fillStyle = rgba(n.color, 1); ctx.fillText(n.text, 0, 0);
+    ctx.restore();
+  }
+}
+function drawPause() {
+  ctx.fillStyle = 'rgba(5,5,20,0.62)'; ctx.fillRect(-20, -20, W + 40, H + 40);
+  text('PAUSE', CX, CY - 20, 84, '#fff', 'center', '900');
+  text('Esc / P / タップ で再開', CX, CY + 50, 22, 'rgba(255,255,255,0.75)', 'center', '700');
+}
+
+function drawTitle() {
+  const t = G.t;
+  // 背景パック
+  for (const p of G.titlePucks) {
+    const n = p.trail.length;
+    for (let i = 0; i < n; i++) { const tr = p.trail[i]; ctx.fillStyle = rgba(p.c, (i + 1) / n * 0.25); ctx.beginPath(); ctx.arc(tr.x, tr.y, p.r * (i + 1) / n, 0, TAU); ctx.fill(); }
+    glow(p.x, p.y, p.r * 3, p.c, 0.5);
+    ctx.fillStyle = rgba(p.c, 0.95); ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.fill();
+  }
+  // タイトル
+  text('N E O N   A I R   H O C K E Y', CX, 96, 18, 'rgba(255,255,255,0.6)', 'center', '700');
+  ctx.save();
+  ctx.translate(CX, 178);
+  const sc = 1 + 0.02 * Math.sin(t * 2.2);
+  ctx.scale(sc, sc);
+  ctx.font = '900 84px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+  ctx.shadowColor = rgba(P1C, 0.8); ctx.shadowBlur = 34;
+  ctx.strokeStyle = 'rgba(5,5,25,0.9)'; ctx.lineWidth = 14; ctx.strokeText('ネオンエアホッケー', 0, 0);
+  ctx.shadowBlur = 0;
+  const g = ctx.createLinearGradient(-330, 0, 330, 0);
+  g.addColorStop(0, rgba(P1C, 1)); g.addColorStop(0.5, '#ffffff'); g.addColorStop(1, rgba(P2C, 1));
+  ctx.fillStyle = g; ctx.fillText('ネオンエアホッケー', 0, 0);
+  ctx.restore();
+  text('先に 7 点 とるか、90 秒で終了！', CX, 246, 22, rgba(GOLD, 1), 'center', '900');
+  // モードボタン
+  for (let i = 0; i < TITLE_BTNS.length; i++) {
+    const r = titleBtnRect(i), sel = i === G.sel;
+    const b = TITLE_BTNS[i];
+    const col = b.mode === '2p' ? GOLD : [P1C, [140, 255, 200], P2C][b.lvl];
+    ctx.save();
+    ctx.translate(r.x + r.w / 2, r.y + r.h / 2);
+    const s = sel ? 1.07 + 0.02 * Math.sin(t * 8) : 1;
+    ctx.scale(s, s);
+    if (sel) glow(0, 0, r.w * 0.75, col, 0.45);
+    const bg = ctx.createLinearGradient(0, -r.h / 2, 0, r.h / 2);
+    if (sel) { bg.addColorStop(0, rgba(col, 0.85)); bg.addColorStop(1, rgba(col, 0.45)); }
+    else { bg.addColorStop(0, 'rgba(40,40,90,0.9)'); bg.addColorStop(1, 'rgba(20,20,50,0.9)'); }
+    ctx.fillStyle = bg; rrect(-r.w / 2, -r.h / 2, r.w, r.h, 16); ctx.fill();
+    ctx.strokeStyle = sel ? '#fff' : rgba(col, 0.7); ctx.lineWidth = sel ? 3 : 2; ctx.stroke();
+    text(b.label, 0, 1, 26, sel ? '#0a0a20' : '#fff', 'center', '900');
+    ctx.restore();
+  }
+  text('← → で選択　／　クリック・タップ・Enter・Space でスタート', CX, 392, 17, 'rgba(255,255,255,0.75)', 'center', '700');
+  // 操作説明
+  ctx.fillStyle = 'rgba(0,0,0,0.35)'; rrect(150, 418, 660, 74, 14); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 1; ctx.stroke();
+  text('P1（左）', 230, 440, 18, rgba(P1C, 1), 'center', '900');
+  text('W A S D ／ マウス ／ 画面の左半分をタッチ', 470, 440, 17, '#fff', 'center', '700');
+  text('P2（右）', 230, 470, 18, rgba(P2C, 1), 'center', '900');
+  text('↑ ↓ ← → ／ 画面の右半分をタッチ　（CPU戦は自動）', 470, 470, 17, '#fff', 'center', '700');
+  const hi = FES.getHiScore();
+  text('CPU戦 HI-SCORE: ' + hi.toLocaleString() + ' pt', CX, 516, 18, rgba(GOLD, 0.9), 'center', '900');
+}
+
+/* =====================================================================
+   メインループ
+   ===================================================================== */
+let last = performance.now();
+function frame(now) {
+  let dt = (now - last) / 1000; last = now;
+  if (!(dt > 0)) dt = 0; if (dt > 0.05) dt = 0.05;
+  try { update(dt); draw(); } catch (err) { console.error(err); }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
