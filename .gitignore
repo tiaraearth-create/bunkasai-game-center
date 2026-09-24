@@ -10,3 +10,7 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
+
+# 印刷用・QR（ローカル専用）
+ポスター.html
+QRコード.svg
