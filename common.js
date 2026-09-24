@@ -44,6 +44,9 @@
     return score > 0 && (r.length < 10 || score > r[r.length - 1].score);
   };
   FES.lastName = () => LS.get('fes:lastName', '');
+  /** ランキングの保存先IDを切り替える（難易度別ランキングなどに使う）。例: FES.setId('rhythm_hard') */
+  FES.setId = function (id) { if (id) cfg.id = String(id); return cfg.id; };
+  FES.getId = () => cfg.id;
 
   /* ------------------------------------------------------------ 音 */
   let actx = null;

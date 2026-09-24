@@ -109,12 +109,17 @@
   .rank { list-style: none; margin: 0 0 18px; padding: 0; font-variant-numeric: tabular-nums; }
   .rank li { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px; font-size: 15px; }
   .rank li:nth-child(odd) { background: rgba(255,255,255,.05); }
-  .rank li:nth-child(1) { background: linear-gradient(90deg, rgba(255,211,110,.3), transparent); font-size: 18px; }
+  .rank li:nth-child(1):not(.sec) { background: linear-gradient(90deg, rgba(255,211,110,.3), transparent); font-size: 18px; }
+  .rank li.sec + li:not(.empty) { background: linear-gradient(90deg, rgba(255,211,110,.3), transparent); font-size: 17px; }
   .rank .r { width: 34px; font-weight: 900; }
   .rank li:nth-child(1) .r { color: var(--gold); } .rank li:nth-child(2) .r { color: #d9d9e6; } .rank li:nth-child(3) .r { color: #e8a26a; }
   .rank .n { flex: 1; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rank .s { font-weight: 900; }
   .rank .empty { text-align: center; color: var(--muted); padding: 24px 0; justify-content: center; }
+  .rank .empty.small { padding: 6px 0 10px; font-size: 13px; }
+  .rank li.sec { background: none; margin-top: 8px; padding: 4px 12px 2px; font-size: 12px; letter-spacing: .2em; font-weight: 900; color: var(--gold); border-bottom: 1px solid var(--line); border-radius: 0; }
+  .rank li.sec:nth-child(1) { font-size: 12px; }
+  .card .hs .who small { font-size: 10px; opacity: .8; }
   .mact { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
   .act { padding: 12px 24px; border-radius: 14px; border: 0; font-size: 15px; font-weight: 900; cursor: pointer; color: #fff; background: linear-gradient(135deg,#6a5cff,#b04dff); box-shadow: 0 8px 24px rgba(120,80,255,.45); text-decoration: none; transition: .15s; }
   .act.alt { background: rgba(255,255,255,.12); box-shadow: none; }
@@ -184,7 +189,8 @@
 
 /* ============================== ゲーム一覧 ============================== */
 const GAMES = [
-  { id: 'rhythm',   title: 'リズムスターズ',       genre: '音楽',        icon: '🎵', accent: '#ff4d8d', desc: '4レーンに降ってくるノーツを、リズムに合わせて叩け！難易度3段階。', ctrl: ['D','F','J','K'] },
+  { id: 'rhythm',   title: 'リズムスターズ',       genre: '音楽',        icon: '🎵', accent: '#ff4d8d', desc: '4曲・ロングノーツ対応のリズムゲーム。難易度3段階、満点は100万点。', ctrl: ['D','F','J','K'],
+    ids: [{ id: 'rhythm_easy', label: 'やさしい' }, { id: 'rhythm', label: 'ふつう' }, { id: 'rhythm_hard', label: 'むずかしい' }] },
   { id: 'shooter',  title: 'ギャラクシーブラスター', genre: 'シューティング', icon: '🚀', accent: '#5ee7ff', desc: '押し寄せる敵とボスを撃ち落とす縦スクロールSTG。パワーアップで無双。', ctrl: ['↑↓←→','Shift'] },
   { id: 'puzzle',   title: 'ジュエルラッシュ',      genre: 'パズル',       icon: '💎', accent: '#b06bff', desc: '90秒のマッチ3タイムアタック。連鎖でスコアが爆発する。', ctrl: ['マウス','タッチ'] },
   { id: 'typing',   title: 'タイピングバトル',      genre: 'タイピング',    icon: '⌨️', accent: '#5cff8d', desc: '60秒でどれだけ打てる？ローマ字入力でモンスターを倒せ。', ctrl: ['キーボード'] },
@@ -195,6 +201,15 @@ const GAMES = [
   { id: 'quiz',     title: '早押しクイズ王',        genre: 'クイズ',       icon: '❓', accent: '#ff6b6b', desc: '4択クイズ10問。早く答えるほど高得点。ジャンル選択あり。', ctrl: ['1〜4','クリック'] },
   { id: 'breakout', title: 'ネオンブレイカー',      genre: 'アーケード',    icon: '🧱', accent: '#a5f3fc', desc: 'ブロック崩し進化版。マルチボール・レーザーで全8ステージを攻略。', ctrl: ['← →','マウス'] },
 ];
+
+// ランキングIDの一覧（難易度別ランキングを持つゲームは ids を持つ）
+function gameIds(g) { return g.ids || [{ id: g.id, label: '' }]; }
+// そのゲームの全ランキングの中で最高の記録 → { name, score, label }
+function bestOf(g) {
+  let best = null;
+  gameIds(g).forEach(x => { const r = FES.getRanking(x.id)[0]; if (r && (!best || r.score > best.score)) best = { name: r.name, score: r.score, label: x.label }; });
+  return best;
+}
 
 /* ============================== タイトル保存 ============================== */
 const titleEl = document.getElementById('title');
@@ -208,8 +223,7 @@ let cards = [];
 function render() {
   grid.innerHTML = ''; cards = [];
   GAMES.forEach((g, i) => {
-    const rank = FES.getRanking(g.id);
-    const top = rank[0];
+    const top = bestOf(g);
     const a = document.createElement('a');
     a.className = 'card'; a.href = `games/${g.id}.html`; a.style.setProperty('--accent', g.accent);
     a.style.animationDelay = (i * 0.05) + 's';
@@ -221,7 +235,7 @@ function render() {
       <div class="ctrl">${g.ctrl.map(c => `<kbd>${c}</kbd>`).join('')}</div>
       <div class="hs">
         <div><div class="lbl">HI-SCORE</div><div class="val">${top ? top.score.toLocaleString() : '---'}</div></div>
-        <div class="who">${top ? '👑 ' + esc(top.name) : 'まだ記録なし'}</div>
+        <div class="who">${top ? '👑 ' + esc(top.name) + (top.label ? ' <small>(' + top.label + ')</small>' : '') : 'まだ記録なし'}</div>
       </div>
       <div class="rankbtn" title="ランキング">🏆</div>`;
     a.querySelector('.rankbtn').addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); openRank(g); });
@@ -239,8 +253,10 @@ function renderTicker() {
   const t = document.getElementById('ticker');
   const items = [];
   GAMES.forEach(g => {
-    const r = FES.getRanking(g.id);
-    if (r[0]) items.push(`<span>${g.icon} <i>${g.title}</i> 1位 <b>${esc(r[0].name)}</b> ${r[0].score.toLocaleString()} pt</span>`);
+    gameIds(g).forEach(x => {
+      const r = FES.getRanking(x.id);
+      if (r[0]) items.push(`<span>${g.icon} <i>${g.title}${x.label ? '（' + x.label + '）' : ''}</i> 1位 <b>${esc(r[0].name)}</b> ${r[0].score.toLocaleString()} pt</span>`);
+    });
   });
   if (!items.length) items.push('<span>🎉 ようこそ！ 全ゲーム無料でプレイできます。ハイスコアを出して名前を残そう！</span>');
   items.push('<span>⭐ ランキングは各ゲームで TOP10 まで記録されます</span>');
@@ -256,13 +272,20 @@ function openRank(g) {
   document.getElementById('mTitle').textContent = g.icon + ' ' + g.title;
   document.getElementById('mPlay').href = `games/${g.id}.html`;
   const ol = document.getElementById('mRank'); ol.innerHTML = '';
-  const r = FES.getRanking(g.id);
-  if (!r.length) ol.innerHTML = '<li class="empty">まだ記録がありません。1番乗りになろう！</li>';
-  r.forEach((e, i) => {
-    const li = document.createElement('li');
-    li.innerHTML = `<span class="r">${i + 1}.</span><span class="n">${esc(e.name)}</span><span class="s">${e.score.toLocaleString()}</span>`;
-    ol.appendChild(li);
+  const ids = gameIds(g);
+  let any = false;
+  ids.forEach(x => {
+    const r = FES.getRanking(x.id);
+    if (ids.length > 1) { const h = document.createElement('li'); h.className = 'sec'; h.textContent = x.label; ol.appendChild(h); }
+    if (!r.length) { if (ids.length > 1) { const li = document.createElement('li'); li.className = 'empty small'; li.textContent = 'まだ記録なし'; ol.appendChild(li); } return; }
+    any = true;
+    r.forEach((e, i) => {
+      const li = document.createElement('li');
+      li.innerHTML = `<span class="r">${i + 1}.</span><span class="n">${esc(e.name)}</span><span class="s">${e.score.toLocaleString()}</span>`;
+      ol.appendChild(li);
+    });
   });
+  if (!any && ids.length === 1) ol.innerHTML = '<li class="empty">まだ記録がありません。1番乗りになろう！</li>';
   modal.classList.add('open');
 }
 document.getElementById('mClose').onclick = () => modal.classList.remove('open');
@@ -280,7 +303,7 @@ const confirmM = document.getElementById('confirm');
 document.getElementById('resetBtn').onclick = () => confirmM.classList.add('open');
 document.getElementById('cNo').onclick = () => confirmM.classList.remove('open');
 document.getElementById('cYes').onclick = () => {
-  GAMES.forEach(g => { try { localStorage.removeItem(`fes:${g.id}:ranking`); } catch (e) {} });
+  GAMES.forEach(g => gameIds(g).forEach(x => { try { localStorage.removeItem(`fes:${x.id}:ranking`); } catch (e) {} }));
   confirmM.classList.remove('open'); render(); FES.toast('ランキングを消去しました');
 };
 
